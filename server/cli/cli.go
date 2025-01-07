@@ -22,11 +22,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 
-	"github.com/bishopfox/sliver/client/version"
+	"github.com/spf13/cobra"
+
 	"github.com/bishopfox/sliver/server/assets"
 	"github.com/bishopfox/sliver/server/c2"
 	"github.com/bishopfox/sliver/server/certs"
@@ -34,12 +35,7 @@ import (
 	"github.com/bishopfox/sliver/server/console"
 	"github.com/bishopfox/sliver/server/cryptography"
 	"github.com/bishopfox/sliver/server/daemon"
-
-	"github.com/spf13/cobra"
-)
-
-var (
-	sliverServerVersion = fmt.Sprintf("v%s", version.FullVersion())
+	"github.com/bishopfox/sliver/server/db"
 )
 
 const (
@@ -48,22 +44,26 @@ const (
 	forceFlagStr = "force"
 
 	// Operator flags
-	nameFlagStr  = "name"
-	lhostFlagStr = "lhost"
-	lportFlagStr = "lport"
-	saveFlagStr  = "save"
+	nameFlagStr        = "name"
+	lhostFlagStr       = "lhost"
+	lportFlagStr       = "lport"
+	saveFlagStr        = "save"
+	outputFlagStr      = "output"
+	permissionsFlagStr = "permissions"
+	tailscaleFlagStr   = "tailscale"
 
 	// Cert flags
 	caTypeFlagStr = "type"
 	loadFlagStr   = "load"
 
+	// console log file name
 	logFileName = "console.log"
 )
 
 // Initialize logging
-func initLogging(appDir string) *os.File {
+func initConsoleLogging(appDir string) *os.File {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	logFile, err := os.OpenFile(path.Join(appDir, "logs", logFileName), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	logFile, err := os.OpenFile(filepath.Join(appDir, "logs", logFileName), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		log.Fatalf("Error opening file: %v", err)
 	}
@@ -72,7 +72,6 @@ func initLogging(appDir string) *os.File {
 }
 
 func init() {
-
 	// Unpack
 	unpackCmd.Flags().BoolP(forceFlagStr, "f", false, "Force unpack and overwrite")
 	rootCmd.AddCommand(unpackCmd)
@@ -82,6 +81,8 @@ func init() {
 	operatorCmd.Flags().StringP(lhostFlagStr, "l", "", "multiplayer listener host")
 	operatorCmd.Flags().Uint16P(lportFlagStr, "p", uint16(31337), "multiplayer listener port")
 	operatorCmd.Flags().StringP(saveFlagStr, "s", "", "save file to ...")
+	operatorCmd.Flags().StringP(outputFlagStr, "o", "file", "output format (file, stdout)")
+	operatorCmd.Flags().StringSliceP(permissionsFlagStr, "P", []string{}, "grant permissions to the operator profile (all, builder, crackstation)")
 	rootCmd.AddCommand(operatorCmd)
 
 	// Certs
@@ -97,7 +98,11 @@ func init() {
 	daemonCmd.Flags().StringP(lhostFlagStr, "l", daemon.BlankHost, "multiplayer listener host")
 	daemonCmd.Flags().Uint16P(lportFlagStr, "p", daemon.BlankPort, "multiplayer listener port")
 	daemonCmd.Flags().BoolP(forceFlagStr, "f", false, "force unpack and overwrite static assets")
+	daemonCmd.Flags().BoolP(tailscaleFlagStr, "t", false, "enable tailscale")
 	rootCmd.AddCommand(daemonCmd)
+
+	// Builder
+	rootCmd.AddCommand(initBuilderCmd())
 
 	// Version
 	rootCmd.AddCommand(versionCmd)
@@ -108,11 +113,10 @@ var rootCmd = &cobra.Command{
 	Short: "",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-
 		// Root command starts the server normally
 
 		appDir := assets.GetRootAppDir()
-		logFile := initLogging(appDir)
+		logFile := initConsoleLogging(appDir)
 		defer logFile.Close()
 
 		defer func() {
@@ -126,14 +130,22 @@ var rootCmd = &cobra.Command{
 		assets.Setup(false, true)
 		certs.SetupCAs()
 		certs.SetupWGKeys()
-		cryptography.ECCServerKeyPair()
-		cryptography.TOTPServerSecret()
+		cryptography.AgeServerKeyPair()
 		cryptography.MinisignServerPrivateKey()
+		c2.SetupDefaultC2Profiles()
 
 		serverConfig := configs.GetServerConfig()
-		c2.StartPersistentJobs(serverConfig)
+		listenerJobs, err := db.ListenerJobs()
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		err = StartPersistentJobs(listenerJobs)
+		if err != nil {
+			fmt.Println(err)
+		}
 		if serverConfig.DaemonMode {
-			daemon.Start(daemon.BlankHost, daemon.BlankPort)
+			daemon.Start(daemon.BlankHost, daemon.BlankPort, serverConfig.DaemonConfig.Tailscale)
 		} else {
 			os.Args = os.Args[:1] // Hide cli from grumble console
 			console.Start()

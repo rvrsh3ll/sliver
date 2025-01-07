@@ -20,27 +20,41 @@ package processes
 
 import (
 	"context"
+	"strconv"
+
+	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"github.com/desertbit/grumble"
-	"google.golang.org/protobuf/proto"
 )
 
 // TerminateCmd - Terminate a process on the remote system
-func TerminateCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	session := con.ActiveTarget.GetSessionInteractive()
-	if session == nil {
+func TerminateCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	session, beacon := con.ActiveTarget.GetInteractive()
+	if session == nil && beacon == nil {
+		con.PrintErrorf("No active session or beacon\n")
 		return
 	}
 
-	pid := ctx.Args.Uint("pid")
+	pid, err := strconv.Atoi(args[0])
+	if err != nil {
+		con.PrintErrorf("Invalid PID: %s (could not convert to int)", args[0])
+		return
+	}
+
+	force, _ := cmd.Flags().GetBool("force")
+
 	terminated, err := con.Rpc.Terminate(context.Background(), &sliverpb.TerminateReq{
-		Request: con.ActiveTarget.Request(ctx),
+		Request: con.ActiveTarget.Request(cmd),
 		Pid:     int32(pid),
-		Force:   ctx.Flags.Bool("force"),
+		Force:   force,
 	})
+	if err != nil {
+		con.PrintErrorf("Terminate failed: %s", err)
+		return
+	}
 
 	if terminated.Response != nil && terminated.Response.Async {
 		con.AddBeaconCallback(terminated.Response.TaskID, func(task *clientpb.BeaconTask) {
@@ -58,7 +72,7 @@ func TerminateCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 }
 
 // PrintTerminate - Print the results of the terminate command
-func PrintTerminate(terminated *sliverpb.Terminate, con *console.SliverConsoleClient) {
+func PrintTerminate(terminated *sliverpb.Terminate, con *console.SliverClient) {
 	if terminated.Response != nil && terminated.Response.GetErr() != "" {
 		con.PrintErrorf("%s\n", terminated.Response.GetErr())
 	} else {

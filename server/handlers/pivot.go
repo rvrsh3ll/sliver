@@ -38,7 +38,6 @@ package handlers
 */
 
 import (
-	"encoding/base64"
 	"fmt"
 
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
@@ -76,8 +75,6 @@ func pivotPeerEnvelopeHandler(implantConn *core.ImplantConnection, data []byte) 
 		resp = serverKeyExchange(implantConn, peerEnvelope)
 	case sliverpb.MsgPivotSessionEnvelope:
 		resp = sessionEnvelopeHandler(implantConn, peerEnvelope)
-	case sliverpb.MsgPivotServerPing:
-		resp = serverPingHandler(implantConn, peerEnvelope)
 	}
 
 	return resp
@@ -130,6 +127,8 @@ func handlePivotEnvelope(pivot *core.Pivot, envelope *sliverpb.Envelope) {
 				pivot.ImplantConn.Send <- respEnvelope
 			}()
 		}
+	} else if envelope.Type == sliverpb.MsgPivotServerPing {
+		pivotServerPingHandler(pivot)
 	} else {
 		pivotLog.Errorf("no pivot handler for envelope type %v", envelope.Type)
 	}
@@ -146,8 +145,23 @@ func pivotPeerFailureHandler(implantConn *core.ImplantConnection, data []byte) *
 
 	core.PivotSessions.Range(func(key, value interface{}) bool {
 		pivot := value.(*core.Pivot)
-		if pivot.OriginID == peerFailure.PeerID {
+
+		found := pivot.OriginID == peerFailure.PeerID
+
+		if !found {
+			pivotLog.Warnf("Filed peer not found by OriginID, searching by Peers instead")
+
+			for _, peer := range pivot.Peers {
+				if peer.PeerID == peerFailure.PeerID {
+					pivotLog.Warnf("Found session with needed peer!")
+					found = true
+				}
+			}
+		}
+
+		if found {
 			session := core.Sessions.FromImplantConnection(pivot.ImplantConn)
+
 			if session != nil {
 				core.Sessions.Remove(session.ID)
 			}
@@ -159,26 +173,9 @@ func pivotPeerFailureHandler(implantConn *core.ImplantConnection, data []byte) *
 	return nil
 }
 
-func serverPingHandler(implantConn *core.ImplantConnection, peerEnvelope *sliverpb.PivotPeerEnvelope) *sliverpb.Envelope {
-	pivotSessionID := uuid.FromBytesOrNil(peerEnvelope.PivotSessionID).String()
-	if pivotSessionID == "" {
-		pivotLog.Errorf("failed to parse pivot session id from peer envelope")
-		return nil
-	}
-
-	// Find the pivot session for the server ping
-	pivotLog.Debugf("origin envelope pivot session ID = %s", pivotSessionID)
-	pivotEntry, ok := core.PivotSessions.Load(pivotSessionID)
-	if !ok {
-		pivotLog.Errorf("pivot session id '%s' not found", pivotSessionID)
-		return nil
-	}
-	pivot := pivotEntry.(*core.Pivot)
-
-	// Update last message time
+func pivotServerPingHandler(pivot *core.Pivot) {
 	pivot.ImplantConn.UpdateLastMessage()
-
-	return nil
+	pivot.ImmediateImplantConn.UpdateLastMessage()
 }
 
 // ------------------------
@@ -207,20 +204,18 @@ func serverKeyExchange(implantConn *core.ImplantConnection, peerEnvelope *sliver
 	// everything after that is the encrypted session key
 	var publicKeyDigest [32]byte
 	copy(publicKeyDigest[:], serverKeyEx.SessionKey[:32])
-	implantConfig, err := db.ImplantConfigByECCPublicKeyDigest(publicKeyDigest)
-	if err != nil || implantConfig == nil {
+	implantBuild, err := db.ImplantBuildByPublicKeyDigest(publicKeyDigest)
+	if err != nil || implantBuild == nil {
 		pivotLog.Warn("Unknown public key digest")
 		return nil
 	}
-	publicKey, err := base64.RawStdEncoding.DecodeString(implantConfig.ECCPublicKey)
-	if err != nil || len(publicKey) != 32 {
-		pivotLog.Warn("Failed to decode public key")
-		return nil
-	}
-	var senderPublicKey [32]byte
-	copy(senderPublicKey[:], publicKey)
-	serverKeyPair := cryptography.ECCServerKeyPair()
-	rawSessionKey, err := cryptography.ECCDecrypt(&senderPublicKey, serverKeyPair.Private, serverKeyEx.SessionKey[32:])
+
+	serverKeyPair := cryptography.AgeServerKeyPair()
+	rawSessionKey, err := cryptography.AgeKeyExFromImplant(
+		serverKeyPair.Private,
+		implantBuild.PeerPrivateKey,
+		serverKeyEx.SessionKey[32:],
+	)
 	if err != nil {
 		pivotLog.Warn("Failed to decrypt session key from origin")
 		return nil
@@ -231,10 +226,11 @@ func serverKeyExchange(implantConn *core.ImplantConnection, peerEnvelope *sliver
 		return nil
 	}
 	pivotSession := core.NewPivotSession(peerEnvelope.Peers)
-	pivotLog.Infof("Pivot session %s created with origin %s", pivotSession.ID, peerEnvelope.Peers[0].Name)
-	pivotLog.Debugf("Peers: %v", peerEnvelope.Peers)
 	pivotSession.OriginID = peerEnvelope.Peers[0].PeerID
 	pivotSession.CipherCtx = cryptography.NewCipherContext(sessionKey)
+
+	pivotLog.Infof("Pivot session %s created with origin %s and OriginID: %v", pivotSession.ID, peerEnvelope.Peers[0].Name, pivotSession.OriginID)
+	pivotLog.Infof("Peers: %v", peerEnvelope.Peers)
 
 	pivotRemoteAddr := peersToString(implantConn.RemoteAddress, peerEnvelope)
 

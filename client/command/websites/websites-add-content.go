@@ -1,10 +1,27 @@
 package websites
 
+/*
+	Sliver Implant Framework
+	Copyright (C) 2019  Bishop Fox
+
+	This program is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 import (
 	"context"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -13,29 +30,29 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// WebsitesAddContentCmd - Add static content to a website
-func WebsitesAddContentCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	websiteName := ctx.Flags.String("website")
+// WebsitesAddContentCmd - Add static content to a website.
+func WebsitesAddContentCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	websiteName, _ := cmd.Flags().GetString("website")
 	if websiteName == "" {
 		con.PrintErrorf("Must specify a website name via --website, see --help\n")
 		return
 	}
-	webPath := ctx.Flags.String("web-path")
+	webPath, _ := cmd.Flags().GetString("web-path")
 	if webPath == "" {
 		con.PrintErrorf("Must specify a web path via --web-path, see --help\n")
 		return
 	}
-	contentPath := ctx.Flags.String("content")
+	contentPath, _ := cmd.Flags().GetString("content")
 	if contentPath == "" {
 		con.PrintErrorf("Must specify some --content\n")
 		return
 	}
 	contentPath, _ = filepath.Abs(contentPath)
-	contentType := ctx.Flags.String("content-type")
-	recursive := ctx.Flags.Bool("recursive")
+	contentType, _ := cmd.Flags().GetString("content-type")
+	recursive, _ := cmd.Flags().GetBool("recursive")
 
 	fileInfo, err := os.Stat(contentPath)
 	if err != nil {
@@ -94,7 +111,7 @@ func webAddFile(web *clientpb.WebsiteAddContent, webpath string, contentType str
 		return err
 	}
 	defer file.Close()
-	data, err := ioutil.ReadAll(file)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return err
 	}

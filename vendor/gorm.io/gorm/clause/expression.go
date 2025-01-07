@@ -67,6 +67,12 @@ func (expr Expr) Build(builder Builder) {
 			builder.WriteByte(v)
 		}
 	}
+
+	if idx < len(expr.Vars) {
+		for _, v := range expr.Vars[idx:] {
+			builder.AddVar(builder, sql.NamedArg{Value: v})
+		}
+	}
 }
 
 // NamedExpr raw expression for named expr
@@ -120,8 +126,8 @@ func (expr NamedExpr) Build(builder Builder) {
 	for _, v := range []byte(expr.SQL) {
 		if v == '@' && !inName {
 			inName = true
-			name = []byte{}
-		} else if v == ' ' || v == ',' || v == ')' || v == '"' || v == '\'' || v == '`' || v == '\n' {
+			name = name[:0]
+		} else if v == ' ' || v == ',' || v == ')' || v == '"' || v == '\'' || v == '`' || v == '\r' || v == '\n' || v == ';' {
 			if inName {
 				if nv, ok := namedMap[string(name)]; ok {
 					builder.AddVar(builder, nv)
@@ -240,15 +246,19 @@ func (eq Eq) Build(builder Builder) {
 
 	switch eq.Value.(type) {
 	case []string, []int, []int32, []int64, []uint, []uint32, []uint64, []interface{}:
-		builder.WriteString(" IN (")
 		rv := reflect.ValueOf(eq.Value)
-		for i := 0; i < rv.Len(); i++ {
-			if i > 0 {
-				builder.WriteByte(',')
+		if rv.Len() == 0 {
+			builder.WriteString(" IN (NULL)")
+		} else {
+			builder.WriteString(" IN (")
+			for i := 0; i < rv.Len(); i++ {
+				if i > 0 {
+					builder.WriteByte(',')
+				}
+				builder.AddVar(builder, rv.Index(i).Interface())
 			}
-			builder.AddVar(builder, rv.Index(i).Interface())
+			builder.WriteByte(')')
 		}
-		builder.WriteByte(')')
 	default:
 		if eqNil(eq.Value) {
 			builder.WriteString(" IS NULL")
@@ -362,7 +372,7 @@ func (like Like) NegationBuild(builder Builder) {
 }
 
 func eqNil(value interface{}) bool {
-	if valuer, ok := value.(driver.Valuer); ok {
+	if valuer, ok := value.(driver.Valuer); ok && !eqNilReflect(valuer) {
 		value, _ = valuer.Value()
 	}
 

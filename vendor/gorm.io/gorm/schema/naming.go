@@ -3,7 +3,6 @@ package schema
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -20,6 +19,7 @@ type Namer interface {
 	RelationshipFKName(Relationship) string
 	CheckerName(table, column string) string
 	IndexName(table, column string) string
+	UniqueName(table, column string) string
 }
 
 // Replacer replacer interface like strings.Replacer
@@ -27,12 +27,15 @@ type Replacer interface {
 	Replace(name string) string
 }
 
+var _ Namer = (*NamingStrategy)(nil)
+
 // NamingStrategy tables, columns naming strategy
 type NamingStrategy struct {
-	TablePrefix   string
-	SingularTable bool
-	NameReplacer  Replacer
-	NoLowerCase   bool
+	TablePrefix         string
+	SingularTable       bool
+	NameReplacer        Replacer
+	NoLowerCase         bool
+	IdentifierMaxLength int
 }
 
 // TableName convert string to table name
@@ -85,17 +88,26 @@ func (ns NamingStrategy) IndexName(table, column string) string {
 	return ns.formatName("idx", table, ns.toDBName(column))
 }
 
-func (ns NamingStrategy) formatName(prefix, table, name string) string {
-	formattedName := strings.Replace(strings.Join([]string{
-		prefix, table, name,
-	}, "_"), ".", "_", -1)
+// UniqueName generate unique constraint name
+func (ns NamingStrategy) UniqueName(table, column string) string {
+	return ns.formatName("uni", table, ns.toDBName(column))
+}
 
-	if utf8.RuneCountInString(formattedName) > 64 {
+func (ns NamingStrategy) formatName(prefix, table, name string) string {
+	formattedName := strings.ReplaceAll(strings.Join([]string{
+		prefix, table, name,
+	}, "_"), ".", "_")
+
+	if ns.IdentifierMaxLength == 0 {
+		ns.IdentifierMaxLength = 64
+	}
+
+	if utf8.RuneCountInString(formattedName) > ns.IdentifierMaxLength {
 		h := sha1.New()
 		h.Write([]byte(formattedName))
 		bs := h.Sum(nil)
 
-		formattedName = fmt.Sprintf("%v%v%v", prefix, table, name)[0:56] + hex.EncodeToString(bs)[:8]
+		formattedName = formattedName[0:ns.IdentifierMaxLength-8] + hex.EncodeToString(bs)[:8]
 	}
 	return formattedName
 }
@@ -120,7 +132,13 @@ func (ns NamingStrategy) toDBName(name string) string {
 	}
 
 	if ns.NameReplacer != nil {
-		name = ns.NameReplacer.Replace(name)
+		tmpName := ns.NameReplacer.Replace(name)
+
+		if tmpName == "" {
+			return name
+		}
+
+		name = tmpName
 	}
 
 	if ns.NoLowerCase {
@@ -168,7 +186,7 @@ func (ns NamingStrategy) toDBName(name string) string {
 }
 
 func (ns NamingStrategy) toSchemaName(name string) string {
-	result := strings.Replace(strings.Title(strings.Replace(name, "_", " ", -1)), " ", "", -1)
+	result := strings.ReplaceAll(strings.Title(strings.ReplaceAll(name, "_", " ")), " ", "")
 	for _, initialism := range commonInitialisms {
 		result = regexp.MustCompile(strings.Title(strings.ToLower(initialism))+"([A-Z]|$|_)").ReplaceAllString(result, initialism+"$1")
 	}

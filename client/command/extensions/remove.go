@@ -28,12 +28,12 @@ import (
 	"github.com/bishopfox/sliver/client/assets"
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/util"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// ExtensionsRemoveCmd - Remove an extension
-func ExtensionsRemoveCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	name := ctx.Args.String("name")
+// ExtensionsRemoveCmd - Remove an extension.
+func ExtensionsRemoveCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	name := args[0]
 	if name == "" {
 		con.PrintErrorf("Extension name is required\n")
 		return
@@ -44,17 +44,27 @@ func ExtensionsRemoveCmd(ctx *grumble.Context, con *console.SliverConsoleClient)
 	if !confirm {
 		return
 	}
-	err := RemoveExtensionByCommandName(name, con)
+	found, err := RemoveExtensionByManifestName(name, con)
 	if err != nil {
-		con.PrintErrorf("Error removing extension: %s\n", err)
+		con.PrintErrorf("Error removing extensions: %s\n", err)
 		return
+	}
+	if !found {
+		err = RemoveExtensionByCommandName(name, con)
+		if err != nil {
+			con.PrintErrorf("Error removing extension: %s\n", err)
+			return
+		} else {
+			con.PrintInfof("Extension '%s' removed\n", name)
+		}
 	} else {
-		con.PrintInfof("Extension '%s' removed\n", name)
+		//found, and no error, manifest must have removed good
+		con.PrintInfof("Extensions from %s removed\n", name)
 	}
 }
 
-// RemoveExtensionByCommandName - Remove an extension by command name
-func RemoveExtensionByCommandName(commandName string, con *console.SliverConsoleClient) error {
+// RemoveExtensionByCommandName - Remove an extension by command name.
+func RemoveExtensionByCommandName(commandName string, con *console.SliverClient) error {
 	if commandName == "" {
 		return errors.New("command name is required")
 	}
@@ -62,13 +72,34 @@ func RemoveExtensionByCommandName(commandName string, con *console.SliverConsole
 		return errors.New("extension not loaded")
 	}
 	delete(loadedExtensions, commandName)
-	con.App.Commands().Remove(commandName)
 	extPath := filepath.Join(assets.GetExtensionsDir(), filepath.Base(commandName))
 	if _, err := os.Stat(extPath); os.IsNotExist(err) {
 		return nil
 	}
 	forceRemoveAll(extPath)
 	return nil
+}
+
+// RemoveExtensionByManifestName - remove by the named manifest, returns true if manifest was removed, false if no manifest with that name was found
+func RemoveExtensionByManifestName(manifestName string, con *console.SliverClient) (bool, error) {
+	if manifestName == "" {
+		return false, errors.New("command name is required")
+	}
+	if man, ok := loadedManifests[manifestName]; ok {
+		//foudn the manifest
+		//delet it
+		extPath := filepath.Join(assets.GetExtensionsDir(), filepath.Base(manifestName))
+		if _, err := os.Stat(extPath); os.IsNotExist(err) {
+			return true, nil
+		}
+		forceRemoveAll(extPath)
+		delete(loadedManifests, manifestName)
+		for _, cmd := range man.ExtCommand {
+			delete(loadedExtensions, cmd.CommandName)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func forceRemoveAll(rootPath string) {

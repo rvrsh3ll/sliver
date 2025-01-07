@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bishopfox/sliver/implant/sliver/transports/mtls"
+	"github.com/bishopfox/sliver/implant/sliver/transports/wireguard"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"github.com/bishopfox/sliver/server/log"
@@ -71,27 +72,43 @@ type Session struct {
 	Extensions        []string
 	ConfigID          string
 	PeerID            int64
+	Locale            string
+	FirstContact      int64
+	Integrity         string
 }
 
 // LastCheckin - Get the last time a session message was received
 func (s *Session) LastCheckin() time.Time {
-	return s.Connection.LastMessage
+	return s.Connection.GetLastMessage()
 }
 
 // IsDead - See if last check-in is within expected variance
 func (s *Session) IsDead() bool {
-	sessionsLog.Debugf("Last checkin was %v", s.Connection.LastMessage)
+	sessionsLog.Debugf("Checking health of %s", s.ID)
+	sessionsLog.Debugf("Last checkin was %v", s.LastCheckin())
 	padding := time.Duration(10 * time.Second) // Arbitrary margin of error
 	timePassed := time.Since(s.LastCheckin())
 	reconnect := time.Duration(s.ReconnectInterval)
 	pollTimeout := time.Duration(s.PollTimeout)
 	if timePassed < reconnect+padding && timePassed < pollTimeout+padding {
-		sessionsLog.Debugf("Last message within reconnect interval / poll timeout with padding")
+		sessionsLog.Debugf("Last message within reconnect interval / poll timeout + padding")
 		return false
 	}
 	if s.Connection.Transport == consts.MtlsStr {
-		if time.Since(s.Connection.LastMessage) < mtls.PingInterval+padding {
+		if timePassed < mtls.PingInterval+padding {
 			sessionsLog.Debugf("Last message within ping interval with padding")
+			return false
+		}
+	}
+	if s.Connection.Transport == consts.WGStr {
+		if timePassed < wireguard.PingInterval+padding {
+			sessionsLog.Debugf("Last message with ping interval with padding")
+			return false
+		}
+	}
+	if s.Connection.Transport == "pivot" {
+		if time.Since(s.Connection.GetLastMessage()) < time.Duration(time.Minute)+padding {
+			sessionsLog.Debugf("Last message within pivot/server ping interval with padding")
 			return false
 		}
 	}
@@ -122,6 +139,9 @@ func (s *Session) ToProtobuf() *clientpb.Session {
 		ProxyURL:          s.ProxyURL,
 		Burned:            s.Burned,
 		PeerID:            s.PeerID,
+		Locale:            s.Locale,
+		FirstContact:      s.FirstContact,
+		Integrity:         s.Integrity,
 	}
 }
 
@@ -138,10 +158,17 @@ func (s *Session) Request(msgType uint32, timeout time.Duration, data []byte) ([
 		// close(resp)
 		delete(s.Connection.Resp, reqID)
 	}()
-	s.Connection.Send <- &sliverpb.Envelope{
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	select {
+	case s.Connection.Send <- &sliverpb.Envelope{
 		ID:   reqID,
 		Type: msgType,
 		Data: data,
+	}:
+	case <-time.After(timeout):
+		return nil, ErrImplantTimeout
 	}
 
 	var respEnvelope *sliverpb.Envelope
@@ -198,10 +225,11 @@ func (s *sessions) Remove(sessionID string) {
 	parentSession := val.(*Session)
 	children := findAllChildrenByPeerID(parentSession.PeerID)
 	s.sessions.Delete(parentSession.ID)
-	coreLog.Debugf("Removing %d children of session %d (%v)", len(children), parentSession.ID, children)
+	coreLog.Debugf("Removing %d children of session %s (%v)", len(children), parentSession.ID, children)
 	for _, child := range children {
 		childSession, ok := s.sessions.LoadAndDelete(child.SessionID)
 		if ok {
+			PivotSessions.Delete(childSession.(*Session).Connection.ID)
 			EventBroker.Publish(Event{
 				EventType: consts.SessionClosedEvent,
 				Session:   childSession.(*Session),
@@ -220,8 +248,10 @@ func (s *sessions) Remove(sessionID string) {
 func NewSession(implantConn *ImplantConnection) *Session {
 	implantConn.UpdateLastMessage()
 	return &Session{
-		ID:         nextSessionID(),
-		Connection: implantConn,
+		ID:           nextSessionID(),
+		Connection:   implantConn,
+		FirstContact: time.Now().Unix(),
+		Integrity:    "-",
 	}
 }
 

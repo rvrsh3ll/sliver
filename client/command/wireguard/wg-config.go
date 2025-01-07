@@ -23,14 +23,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 	"text/template"
 
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
 var wgQuickTemplate = `[Interface]
@@ -51,8 +51,8 @@ type wgQuickConfig struct {
 	AllowedSubnet   string
 }
 
-// WGConfigCmd - Generate a WireGuard client configuration
-func WGConfigCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// WGConfigCmd - Generate a WireGuard client configuration.
+func WGConfigCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	wgConfig, err := con.Rpc.GenerateWGClientConfig(context.Background(), &commonpb.Empty{})
 	if err != nil {
 		con.PrintErrorf("Error: %s\n", err)
@@ -86,15 +86,15 @@ func WGConfigCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 		AllowedSubnet:   network.String(),
 	})
 
-	save := ctx.Flags.String("save")
+	save, _ := cmd.Flags().GetString("save")
 	if save == "" {
-		con.PrintInfof("New client config:")
+		con.PrintInfof("New client config:\n")
 		con.Println(output.String())
 	} else {
 		if !strings.HasSuffix(save, ".conf") {
 			save += ".conf"
 		}
-		err = ioutil.WriteFile(save, output.Bytes(), 0600)
+		err = os.WriteFile(save, output.Bytes(), 0o600)
 		if err != nil {
 			con.PrintErrorf("Error: %s\n", err)
 			return

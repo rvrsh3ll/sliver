@@ -21,26 +21,36 @@ package encoders
 import (
 	"bytes"
 	"compress/gzip"
+	"sync"
 )
 
-// GzipEncoderID - EncoderID
-const GzipEncoderID = 49
-
 // Gzip - Gzip compression encoder
-type Gzip struct{}
+type GzipEncoder struct{}
+
+var gzipWriterPools = &sync.Pool{}
+
+func init() {
+	gzipWriterPools = &sync.Pool{
+		New: func() interface{} {
+			w, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
+			return w
+		},
+	}
+}
 
 // Encode - Compress data with gzip
-func (g Gzip) Encode(data []byte) []byte {
+func (g GzipEncoder) Encode(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	gzipWriter, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	gzipWriter := gzipWriterPools.Get().(*gzip.Writer)
+	gzipWriter.Reset(&buf)
 	gzipWriter.Write(data)
 	gzipWriter.Close()
-	return buf.Bytes()
+	gzipWriterPools.Put(gzipWriter)
+	return buf.Bytes(), nil
 }
 
 // Decode - Uncompressed data with gzip
-func (g Gzip) Decode(data []byte) ([]byte, error) {
-	bytes.NewReader(data)
+func (g GzipEncoder) Decode(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err

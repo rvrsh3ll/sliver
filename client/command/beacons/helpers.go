@@ -20,7 +20,6 @@ package beacons
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -28,6 +27,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/AlecAivazis/survey/v2"
+
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
@@ -43,8 +43,10 @@ var (
 )
 
 // SelectBeacon - Interactive menu for the user to select an session, optionally only display live sessions
-func SelectBeacon(con *console.SliverConsoleClient) (*clientpb.Beacon, error) {
-	beacons, err := con.Rpc.GetBeacons(context.Background(), &commonpb.Empty{})
+func SelectBeacon(con *console.SliverClient) (*clientpb.Beacon, error) {
+	grpcCtx, cancel := con.GrpcContext(nil)
+	defer cancel()
+	beacons, err := con.Rpc.GetBeacons(grpcCtx, &commonpb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -100,8 +102,10 @@ func SelectBeacon(con *console.SliverConsoleClient) (*clientpb.Beacon, error) {
 	return nil, ErrNoSelection
 }
 
-func GetBeacon(con *console.SliverConsoleClient, beaconID string) (*clientpb.Beacon, error) {
-	beacons, err := con.Rpc.GetBeacons(context.Background(), &commonpb.Empty{})
+func GetBeacon(con *console.SliverClient, beaconID string) (*clientpb.Beacon, error) {
+	grpcCtx, cancel := con.GrpcContext(nil)
+	defer cancel()
+	beacons, err := con.Rpc.GetBeacons(grpcCtx, &commonpb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -109,15 +113,17 @@ func GetBeacon(con *console.SliverConsoleClient, beaconID string) (*clientpb.Bea
 		return nil, ErrNoBeacons
 	}
 	for _, beacon := range beacons.Beacons {
-		if beacon.ID == beaconID {
+		if beacon.ID == beaconID || strings.HasPrefix(beacon.ID, beaconID) {
 			return beacon, nil
 		}
 	}
 	return nil, ErrBeaconNotFound
 }
 
-func GetBeacons(con *console.SliverConsoleClient) (*clientpb.Beacons, error) {
-	beacons, err := con.Rpc.GetBeacons(context.Background(), &commonpb.Empty{})
+func GetBeacons(con *console.SliverClient) (*clientpb.Beacons, error) {
+	grpcCtx, cancel := con.GrpcContext(nil)
+	defer cancel()
+	beacons, err := con.Rpc.GetBeacons(grpcCtx, &commonpb.Empty{})
 	if err != nil {
 		return nil, err
 	}

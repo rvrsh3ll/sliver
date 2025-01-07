@@ -24,30 +24,33 @@ import (
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/desertbit/grumble"
 )
 
-// RmCmd - Remove a directory from the remote file system
-func RmCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// RmCmd - Remove a directory from the remote file system.
+func RmCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	filePath := ctx.Args.String("path")
+	filePath := args[0]
+	// filePath := ctx.Args.String("path")
 
 	if filePath == "" {
 		con.PrintErrorf("Missing parameter: file or directory name\n")
 		return
 	}
 
+	recursive, _ := cmd.Flags().GetBool("recursive")
+	force, _ := cmd.Flags().GetBool("force")
+
 	rm, err := con.Rpc.Rm(context.Background(), &sliverpb.RmReq{
-		Request:   con.ActiveTarget.Request(ctx),
+		Request:   con.ActiveTarget.Request(cmd),
 		Path:      filePath,
-		Recursive: ctx.Flags.Bool("recursive"),
-		Force:     ctx.Flags.Bool("force"),
+		Recursive: recursive,
+		Force:     force,
 	})
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
@@ -68,8 +71,8 @@ func RmCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	}
 }
 
-// PrintRm - Print the rm response
-func PrintRm(rm *sliverpb.Rm, con *console.SliverConsoleClient) {
+// PrintRm - Print the rm response.
+func PrintRm(rm *sliverpb.Rm, con *console.SliverClient) {
 	if rm.Response != nil && rm.Response.Err != "" {
 		con.PrintErrorf("%s\n", rm.Response.Err)
 		return

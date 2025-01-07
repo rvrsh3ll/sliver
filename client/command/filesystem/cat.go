@@ -27,32 +27,40 @@ import (
 	"github.com/alecthomas/chroma/formatters"
 	"github.com/alecthomas/chroma/lexers"
 	"github.com/alecthomas/chroma/styles"
+	"github.com/bishopfox/sliver/client/command/loot"
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"github.com/bishopfox/sliver/util/encoders"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/desertbit/grumble"
 )
 
-// CatCmd - Display the contents of a remote file
-func CatCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// CatCmd - Display the contents of a remote file.
+func CatCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	filePath := ctx.Args.String("path")
+	var filePath string
+	if len(args) > 0 {
+		filePath = args[0]
+	}
 	if filePath == "" {
 		con.PrintErrorf("Missing parameter: file name\n")
 		return
 	}
 
+	ctrl := make(chan bool)
+	con.SpinUntil(fmt.Sprintf("Downloading %s ...", filePath), ctrl)
 	download, err := con.Rpc.Download(context.Background(), &sliverpb.DownloadReq{
-		Request: con.ActiveTarget.Request(ctx),
-		Path:    filePath,
+		Request:          con.ActiveTarget.Request(cmd),
+		RestrictedToFile: true,
+		Path:             filePath,
 	})
+	ctrl <- true
+	<-ctrl
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
 		return
@@ -64,34 +72,48 @@ func CatCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 				con.PrintErrorf("Failed to decode response %s\n", err)
 				return
 			}
-			PrintCat(download, ctx, con)
+			PrintCat(download, cmd, con)
 		})
 		con.PrintAsyncResponse(download.Response)
 	} else {
-		PrintCat(download, ctx, con)
+		PrintCat(download, cmd, con)
 	}
 }
 
-// PrintCat - Print the download to stdout
-func PrintCat(download *sliverpb.Download, ctx *grumble.Context, con *console.SliverConsoleClient) {
-	var err error
+// PrintCat - Print the download to stdout.
+func PrintCat(download *sliverpb.Download, cmd *cobra.Command, con *console.SliverClient) {
+	var (
+		lootDownload bool = true
+		err          error
+	)
+	saveLoot, _ := cmd.Flags().GetBool("loot")
+	lootName, _ := cmd.Flags().GetString("name")
+	userLootFileType, _ := cmd.Flags().GetString("file-type")
 	if download.Response != nil && download.Response.Err != "" {
 		con.PrintErrorf("%s\n", download.Response.Err)
 		return
 	}
+
 	if download.Encoder == "gzip" {
 		download.Data, err = new(encoders.Gzip).Decode(download.Data)
 		if err != nil {
-			con.PrintErrorf("%s\n", err)
-			return
+			con.PrintErrorf("Decoding failed %s", err)
 		}
 	}
-	if ctx.Flags.Bool("colorize-output") {
+
+	if saveLoot {
+		fileType := loot.ValidateLootFileType(userLootFileType, download.Data)
+		if lootDownload {
+			loot.LootDownload(download, lootName, fileType, cmd, con)
+			con.Printf("\n")
+		}
+	}
+	if color, _ := cmd.Flags().GetBool("colorize-output"); color {
 		if err = colorize(download); err != nil {
 			con.Println(string(download.Data))
 		}
 	} else {
-		if ctx.Flags.Bool("hex") {
+		if phex, _ := cmd.Flags().GetBool("hex"); phex {
 			con.Println(hex.Dump(download.Data))
 		} else {
 			con.Println(string(download.Data))

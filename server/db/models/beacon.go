@@ -52,6 +52,8 @@ type Beacon struct {
 	ReconnectInterval int64
 	ActiveC2          string
 	ProxyURL          string
+	Locale            string
+	Integrity         string
 
 	ImplantBuildID uuid.UUID `gorm:"type:uuid;"`
 
@@ -65,6 +67,7 @@ type Beacon struct {
 // BeforeCreate - GORM hook
 func (b *Beacon) BeforeCreate(tx *gorm.DB) (err error) {
 	b.CreatedAt = time.Now()
+	b.Integrity = "-"
 	return nil
 }
 
@@ -91,6 +94,9 @@ func (b *Beacon) ToProtobuf() *clientpb.Beacon {
 		Interval:          b.Interval,
 		Jitter:            b.Jitter,
 		NextCheckin:       b.NextCheckin,
+		Locale:            b.Locale,
+		FirstContact:      b.CreatedAt.Unix(),
+		Integrity:         b.Integrity,
 	}
 }
 
@@ -112,6 +118,7 @@ const (
 	PENDING   = "pending"
 	SENT      = "sent"
 	COMPLETED = "completed"
+	CANCELED  = "canceled"
 )
 
 type BeaconTask struct {
@@ -120,8 +127,8 @@ type BeaconTask struct {
 	BeaconID    uuid.UUID `gorm:"type:uuid;"`
 	CreatedAt   time.Time `gorm:"->;<-:create;"`
 	State       string
-	SentAt      time.Time
-	CompletedAt time.Time
+	SentAt      int64
+	CompletedAt int64
 	Description string
 	Request     []byte // *sliverpb.Envelope
 	Response    []byte // *sliverpb.Envelope
@@ -148,10 +155,10 @@ func (b *BeaconTask) ToProtobuf(content bool) *clientpb.BeaconTask {
 	task := &clientpb.BeaconTask{
 		ID:          b.ID.String(),
 		BeaconID:    b.BeaconID.String(),
-		CreatedAt:   int64(b.CreatedAt.UTC().Unix()),
+		CreatedAt:   b.CreatedAt.Unix(),
 		State:       b.State,
-		SentAt:      int64(b.SentAt.UTC().Unix()),
-		CompletedAt: int64(b.CompletedAt.UTC().Unix()),
+		SentAt:      b.SentAt,
+		CompletedAt: b.CompletedAt,
 		Description: b.Description,
 	}
 	if content {

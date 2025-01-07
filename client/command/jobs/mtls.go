@@ -23,19 +23,18 @@ import (
 
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// MTLSListenerCmd - Start an mTLS listener
-func MTLSListenerCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	lhost := ctx.Flags.String("lhost")
-	lport := uint16(ctx.Flags.Int("lport"))
+// MTLSListenerCmd - Start an mTLS listener.
+func MTLSListenerCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	lhost, _ := cmd.Flags().GetString("lhost")
+	lport, _ := cmd.Flags().GetUint32("lport")
 
 	con.PrintInfof("Starting mTLS listener ...\n")
 	mtls, err := con.Rpc.StartMTLSListener(context.Background(), &clientpb.MTLSListenerReq{
-		Host:       lhost,
-		Port:       uint32(lport),
-		Persistent: ctx.Flags.Bool("persistent"),
+		Host: lhost,
+		Port: lport,
 	})
 	con.Println()
 	if err != nil {

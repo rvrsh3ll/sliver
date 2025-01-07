@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 
@@ -43,10 +42,13 @@ type Server struct {
 	// bindIP is used for bind or udp associate
 	bindIP net.IP
 	// logger can be used to provide a custom log target.
-	// Defaults to ioutil.Discard.
+	// Defaults to io.Discard.
 	logger Logger
-	// Optional function for dialing out
+	// Optional function for dialing out.
+	// The callback set by dialWithRequest will be called first.
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Optional function for dialing out with the access of request detail.
+	dialWithRequest func(ctx context.Context, network, addr string, request *Request) (net.Conn, error)
 	// buffer pool
 	bufferPool bufferpool.BufPool
 	// goroutine pool
@@ -64,10 +66,7 @@ func NewServer(opts ...Option) *Server {
 		bufferPool:  bufferpool.NewPool(32 * 1024),
 		resolver:    DNSResolver{},
 		rules:       NewPermitAll(),
-		logger:      NewLogger(log.New(ioutil.Discard, "socks5: ", log.LstdFlags)),
-		dial: func(ctx context.Context, net_, addr string) (net.Conn, error) {
-			return net.Dial(net_, addr)
-		},
+		logger:      NewLogger(log.New(io.Discard, "socks5: ", log.LstdFlags)),
 	}
 
 	for _, opt := range opts {
@@ -127,7 +126,11 @@ func (sf *Server) ServeConn(conn net.Conn) error {
 	}
 
 	// Authenticate the connection
-	authContext, err = sf.authenticate(conn, bufConn, conn.RemoteAddr().String(), mr.Methods)
+	userAddr := ""
+	if conn.RemoteAddr() != nil {
+		userAddr = conn.RemoteAddr().String()
+	}
+	authContext, err = sf.authenticate(conn, bufConn, userAddr, mr.Methods)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate: %w", err)
 	}
@@ -171,7 +174,7 @@ func (sf *Server) authenticate(conn io.Writer, bufConn io.Reader,
 		}
 	}
 	// No usable method found
-	conn.Write([]byte{statute.VersionSocks5, statute.MethodNoAcceptable}) // nolint: errcheck
+	conn.Write([]byte{statute.VersionSocks5, statute.MethodNoAcceptable}) //nolint: errcheck
 	return nil, statute.ErrNoSupportedAuth
 }
 

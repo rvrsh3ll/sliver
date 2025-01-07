@@ -29,14 +29,15 @@ import (
 // Host - Represents a host machine
 type Host struct {
 	ID        uuid.UUID `gorm:"primaryKey;->;<-:create;type:uuid;"`
-	HostUUID  uuid.UUID `gorm:"type:uuid;"`
+	HostUUID  uuid.UUID `gorm:"type:uuid;unique"`
 	CreatedAt time.Time `gorm:"->;<-:create;"`
 
 	Hostname  string
-	OSVersion string // Verbore OS version
+	OSVersion string // Verbose OS version
+	Locale    string // Detected language code
 
-	IOCs          []IOC
-	ExtensionData []ExtensionData
+	IOCs          []IOC           `gorm:"foreignKey:HostID;references:HostUUID"`
+	ExtensionData []ExtensionData `gorm:"foreignKey:HostID;references:HostUUID"`
 }
 
 // BeforeCreate - GORM hook
@@ -54,8 +55,10 @@ func (h *Host) ToProtobuf() *clientpb.Host {
 		HostUUID:      h.HostUUID.String(),
 		Hostname:      h.Hostname,
 		OSVersion:     h.OSVersion,
+		Locale:        h.Locale,
 		IOCs:          h.iocsToProtobuf(),
 		ExtensionData: h.extensionDataToProtobuf(),
+		FirstContact:  h.CreatedAt.Unix(),
 	}
 }
 
@@ -104,6 +107,7 @@ func (i *IOC) ToProtobuf() *clientpb.IOC {
 	return &clientpb.IOC{
 		Path:     i.Path,
 		FileHash: i.FileHash,
+		ID:       i.ID.String(),
 	}
 }
 

@@ -9,6 +9,7 @@ package syscalls
 //sys HeapSize(hHeap windows.Handle, dwFlags uint32, lpMem uintptr) (res uint32, err error) = kernel32.HeapSize
 //sys UpdateProcThreadAttribute(lpAttributeList *PROC_THREAD_ATTRIBUTE_LIST, dwFlags uint32, attribute uintptr, lpValue *uintptr, cbSize uintptr, lpPreviousValue uintptr, lpReturnSize *uintptr) (err error) = kernel32.UpdateProcThreadAttribute
 //sys CreateProcess(appName *uint16, commandLine *uint16, procSecurity *windows.SecurityAttributes, threadSecurity *windows.SecurityAttributes, inheritHandles bool, creationFlags uint32, env *uint16, currentDir *uint16, startupInfo *StartupInfoEx, outProcInfo *windows.ProcessInformation) (err error) = kernel32.CreateProcessW
+//sys CreateProcessWithLogonW(username *uint16, domain *uint16, password *uint16, logonFlags uint32, appName *uint16, commandLine *uint16, creationFlags uint32, env *uint16, currentDir *uint16, startupInfo *StartupInfoEx, outProcInfo *windows.ProcessInformation) (err error) = advapi32.CreateProcessWithLogonW
 //sys VirtualAllocEx(hProcess windows.Handle, lpAddress uintptr, dwSize uintptr, flAllocationType uint32, flProtect uint32) (addr uintptr, err error) = kernel32.VirtualAllocEx
 //sys WriteProcessMemory(hProcess windows.Handle, lpBaseAddress uintptr, lpBuffer *byte, nSize uintptr, lpNumberOfBytesWritten *uintptr) (err error) = kernel32.WriteProcessMemory
 //sys VirtualProtectEx(hProcess windows.Handle, lpAddress uintptr, dwSize uintptr, flNewProtect uint32, lpflOldProtect *uint32) (err error) = kernel32.VirtualProtectEx
@@ -19,7 +20,7 @@ package syscalls
 //sys CreateThread(lpThreadAttributes *windows.SecurityAttributes, dwStackSize uint32, lpStartAddress uintptr, lpParameter uintptr, dwCreationFlags uint32, lpThreadId *uint32)(threadHandle windows.Handle, err error) = kernel32.CreateThread
 //sys GetExitCodeThread(hTread windows.Handle, lpExitCode *uint32) (err error) = kernel32.GetExitCodeThread
 
-//sys MiniDumpWriteDump(hProcess windows.Handle, pid uint32, hFile uintptr, dumpType uint32, exceptionParam uintptr, userStreamParam uintptr, callbackParam uintptr) (err error) = DbgHelp.MiniDumpWriteDump
+//sys MiniDumpWriteDump(hProcess windows.Handle, pid uint32, hFile uintptr, dumpType uint32, exceptionParam uintptr, userStreamParam uintptr, callbackParam uintptr) (err error) = DbgCore.MiniDumpWriteDump
 //sys ImpersonateLoggedOnUser(hToken windows.Token) (err error) = advapi32.ImpersonateLoggedOnUser
 //sys LogonUser(lpszUsername *uint16, lpszDomain *uint16, lpszPassword *uint16, dwLogonType uint32, dwLogonProvider uint32, phToken *windows.Token) (err error) = advapi32.LogonUserW
 
@@ -45,3 +46,4 @@ package syscalls
 //sys LookupPrivilegeDisplayNameW(systemName string, privilegeName *uint16, buffer *uint16, size *uint32, languageId *uint32) (err error) = advapi32.LookupPrivilegeDisplayNameW
 
 //sys Module32FirstW(hSnapshot windows.Handle, lpme *MODULEENTRY32W) (err error) = kernel32.Module32FirstW
+//sys RegSaveKeyW(hKey windows.Handle, lpFile *uint16, lpSecurityAttributes *windows.SecurityAttributes) (err error) = advapi32.RegSaveKeyW

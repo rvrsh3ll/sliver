@@ -55,6 +55,7 @@ message Register {
   string ProxyURL = 14;
   string ConfigID = 16;
   int64 PeerID = 17;
+  string Locale = 18;
 }
 
 message BeaconRegister {
@@ -170,6 +171,9 @@ message FileInfo {
   int64 Size = 3;
   int64 ModTime = 4;
   string Mode = 5;
+  string Link = 6;
+  string Uid = 7;
+  string Gid = 8;
 }
 
 message CdReq {
@@ -201,6 +205,35 @@ message Rm {
   commonpb.Response Response = 9;
 }
 
+message MvReq {
+  string Src = 1;
+  string Dst = 2;
+
+  commonpb.Request Request = 9;
+}
+
+message Mv {
+  string Src = 1;
+  string Dst = 2;
+
+  commonpb.Response Response = 9;
+}
+
+message CpReq {
+  string Src = 1;
+  string Dst = 2;
+
+  commonpb.Request Request = 9;
+}
+
+message Cp {
+  string Src = 1;
+  string Dst = 2;
+  int64 BytesWritten = 3;
+
+  commonpb.Response Response = 9;
+}
+
 message MkdirReq {
   string Path = 1;
 
@@ -217,6 +250,10 @@ message DownloadReq {
   string Path = 1;
   int64 Start = 2;
   int64 Stop = 3;
+  bool Recurse = 4;
+  int64 MaxBytes = 5;
+  int64 MaxLines = 6;
+  bool RestrictedToFile = 7;
 
   commonpb.Request Request = 9;
 }
@@ -228,6 +265,9 @@ message Download {
   int64 Start = 4;
   int64 Stop = 5;
   bytes Data = 6;
+  bool IsDir = 7;
+  int32 ReadFiles = 8;
+  int32 UnreadableFiles = 10;
 
   commonpb.Response Response = 9;
 }
@@ -237,12 +277,74 @@ message UploadReq {
   string Encoder = 2;
   bytes Data = 3;
   bool IsIOC = 4;
+  string FileName = 5;
+  bool IsDirectory = 6;
+  bool Overwrite = 7;
 
   commonpb.Request Request = 9;
 }
 
 message Upload {
   string Path = 1;
+  int32 WrittenFiles = 2;
+  int32 UnwriteableFiles = 3;
+
+  commonpb.Response Response = 9;
+}
+
+message GrepReq {
+  string SearchPattern = 1;
+  string Path = 2;
+  bool Recursive = 3;
+  int32 LinesBefore = 4;
+  int32 LinesAfter = 5;
+
+  commonpb.Request Request = 9;
+}
+
+message GrepLinePosition {
+  int32 Start = 1;
+  int32 End = 2;
+}
+
+message GrepResult {
+  int64 LineNumber = 1;
+  repeated GrepLinePosition Positions = 2;
+  string Line = 3;
+  repeated string LinesBefore = 4;
+  repeated string LinesAfter = 5;
+}
+
+message GrepResultsForFile {
+  repeated GrepResult FileResults = 1;
+  bool IsBinary = 2;
+}
+
+message Grep {
+  map<string, GrepResultsForFile> Results = 1;
+  string SearchPathAbsolute = 2;
+
+  commonpb.Response Response = 9;
+}
+
+message MountReq {
+  commonpb.Request Request = 9;
+}
+
+message MountInfo {
+  string VolumeName = 1;
+  string VolumeType = 2;
+  string MountPoint = 3;
+  string Label = 4;
+  string FileSystem = 5;
+  uint64 UsedSpace = 6;
+  uint64 FreeSpace = 7;
+  uint64 TotalSpace = 8;
+  string MountOptions = 9;
+}
+
+message Mount {
+  repeated MountInfo Info = 1;
 
   commonpb.Response Response = 9;
 }
@@ -260,10 +362,15 @@ message ProcessDump {
   commonpb.Response Response = 9;
 }
 
+
 message RunAsReq {
   string Username = 1;
   string ProcessName = 2;
   string Args = 3;
+  string Domain = 4;
+  string Password = 5;
+  bool HideWindow = 6;
+  bool NetOnly = 7;
 
   commonpb.Request Request = 9;
 }
@@ -291,6 +398,16 @@ message RevToSelf {
   commonpb.Response Response = 9;
 }
 
+message CurrentTokenOwnerReq {
+  commonpb.Request Request = 9;
+}
+
+message CurrentTokenOwner {
+  string Output = 1;
+
+  commonpb.Response Response = 9;
+}
+
 // InvokeGetSystemReq - Implant-side version of GetSystemReq, this message
 //                      contains the .Data based on the client's req.Config
 message InvokeGetSystemReq {
@@ -310,6 +427,7 @@ message MakeTokenReq {
   string Username = 1;
   string Password = 2;
   string Domain = 3;
+  uint32 LogonType = 4;
 
   commonpb.Request Request = 9;
 }
@@ -333,20 +451,38 @@ message Task {
 
 message ExecuteAssemblyReq {
   bytes Assembly = 1;
-  string Arguments = 2;
+  repeated string Arguments = 2;
   string Process = 3;
   bool IsDLL = 4;
   string Arch = 5;
   string ClassName = 6;
   string Method = 7;
   string AppDomain = 8;
+  uint32 PPid = 10;
+  repeated string ProcessArgs = 11;
+  // In process specific fields
+  bool InProcess = 12;
+  string Runtime = 13;
+  bool AmsiBypass = 14;
+  bool EtwBypass = 15;
   commonpb.Request Request = 9;
 }
 
 message InvokeExecuteAssemblyReq {
   bytes Data = 1;
   string process = 2;
+  uint32 PPid = 10;
+  repeated string ProcessArgs = 11;
 
+  commonpb.Request Request = 9;
+}
+
+message InvokeInProcExecuteAssemblyReq {
+  bytes Data = 1;
+  repeated string Arguments = 2;
+  string Runtime = 3;
+  bool AmsiBypass = 4;
+  bool EtwBypass = 5;
   commonpb.Request Request = 9;
 }
 
@@ -359,12 +495,14 @@ message ExecuteAssembly {
 message InvokeMigrateReq {
   uint32 Pid = 1;
   bytes Data = 2;
+  string ProcName = 3;
 
   commonpb.Request Request = 9;
 }
 
 message Migrate {
   bool Success = 1;
+  uint32 Pid = 2;
 
   commonpb.Response Response = 9;
 }
@@ -375,16 +513,20 @@ message ExecuteReq {
   bool Output = 3;
   string Stdout = 4;
   string Stderr = 5;
+  uint32 PPid = 10;
 
   commonpb.Request Request = 9;
 }
 
-message ExecuteTokenReq {
+message ExecuteWindowsReq {
   string Path = 1;
   repeated string Args = 2;
   bool Output = 3;
   string Stdout = 4;
   string Stderr = 5;
+  bool UseToken = 6;
+  bool HideWindow = 7;
+  uint32 PPid = 10;
 
   commonpb.Request Request = 9;
 }
@@ -401,10 +543,13 @@ message Execute {
 message SideloadReq {
   bytes Data = 1;
   string ProcessName = 2;
-  string Args = 3;
+  repeated string Args = 3;
   string EntryPoint = 4;
   bool Kill = 5;
   bool isDLL = 6;
+  bool isUnicode = 7;
+  uint32 PPid = 10;
+  repeated string ProcessArgs = 11;
 
   commonpb.Request Request = 9;
 }
@@ -418,9 +563,11 @@ message Sideload {
 message InvokeSpawnDllReq {
   bytes Data = 1;
   string ProcessName = 2;
-  string Args = 3;
+  repeated string Args = 3;
   string EntryPoint = 4;
   bool Kill = 5;
+  uint32 PPid = 10;
+  repeated string ProcessArgs = 11;
 
   commonpb.Request Request = 9;
 }
@@ -429,8 +576,10 @@ message SpawnDllReq {
   bytes Data = 1;
   string ProcessName = 2;
   uint32 Offset = 3;
-  string Args = 4;
+  repeated string Args = 4;
   bool Kill = 5;
+  uint32 PPid = 10;
+  repeated string ProcessArgs = 11;
 
   commonpb.Request Request = 9;
 }
@@ -498,20 +647,6 @@ message UnsetEnv {
   commonpb.Response Response = 9;
 }
 
-// DNS Specific messages
-message DNSSessionInit {
-  bytes Key = 1;
-}
-
-message DNSPoll {
-  repeated DNSBlockHeader blocks = 1;
-}
-
-message DNSBlockHeader {
-  string ID = 1;
-  uint32 Size = 2;
-}
-
 // HTTP Sepecific message
 message HTTPSessionInit {
   bytes Key = 1;
@@ -558,15 +693,13 @@ message RemoveServiceReq {
   commonpb.Request Request = 9;
 }
 
-message BackdoorReq {
-  string FilePath = 1;
-  string ProfileName = 2;
-
-  commonpb.Request Request = 9;
-}
-
-message Backdoor {
-  commonpb.Response Response = 9;
+// Registry - Registry related messages
+enum RegistryType {
+  Unknown = 0;
+  Binary = 1;
+  String = 2;
+  DWORD = 3;
+  QWORD = 4;
 }
 
 message RegistryReadReq {
@@ -651,6 +784,19 @@ message RegistryValuesList {
   commonpb.Response Response = 9;
 }
 
+message RegistryReadHiveReq {
+  string RootHive = 1;
+  string RequestedHive = 2;
+  commonpb.Request Request = 9;
+}
+
+message RegistryReadHive {
+  bytes Data = 1;
+  string Encoder = 2;
+
+  commonpb.Response Response = 9;
+}
+
 // Tunnel - Tunnel related messages
 message Tunnel {
   uint64 TunnelID = 8 [jstype = JS_STRING];
@@ -663,7 +809,8 @@ message TunnelData {
   uint64 Sequence = 3;
   uint64 Ack = 4;
   bool Resend = 5;
-
+  bool CreateReverse = 6;
+  RPortfwd rportfwd = 7;
   uint64 TunnelID = 8 [jstype = JS_STRING];
   string SessionID = 9;
 }
@@ -708,6 +855,7 @@ message Portfwd {
 }
 
 // *** Socks ***
+
 message Socks {
 
   uint64 TunnelID = 8 [jstype = JS_STRING];
@@ -736,6 +884,7 @@ enum PivotType {
 message PivotStartListenerReq {
   PivotType Type = 1;
   string BindAddress = 2;
+  repeated bool Options = 3;
 
   commonpb.Request Request = 9;
 }
@@ -757,7 +906,7 @@ message PivotListener {
  
 message PivotHello {
   bytes PublicKey = 1;
-  int64 PeerID = 2;
+  int64 PeerID = 2 [jstype = JS_STRING];
   string PublicKeySignature = 3;
   bytes SessionKey = 4;
 }
@@ -768,7 +917,7 @@ message PivotServerKeyExchange {
 }
 
 message PivotPeer {
-  int64 PeerID = 1;
+  int64 PeerID = 1 [jstype = JS_STRING];
   string Name = 2;
 }
 
@@ -785,7 +934,7 @@ message PivotPing {
 }
 
 message NetConnPivot {
-  int64 PeerID = 1;
+  int64 PeerID = 1 [jstype = JS_STRING];
   string RemoteAddress = 2;
 }
 
@@ -795,7 +944,7 @@ enum PeerFailureType {
 }
 
 message PivotPeerFailure {
-  int64 PeerID = 1;
+  int64 PeerID = 1 [jstype = JS_STRING];
   PeerFailureType Type = 2;
   string Err = 3;
 }
@@ -812,6 +961,7 @@ message PivotListeners {
 }
 
 // *** Wiregard ***
+
 message WGPortForwardStartReq {
   int32 LocalPort = 1;
   string RemoteAddress = 2;
@@ -872,14 +1022,17 @@ message WGTCPForwarders {
   commonpb.Response Response = 9;
 }
 
-// ReconnectIntervalReq - Request the implant to update it's reconnect interval
-message ReconnectIntervalReq {
+// ReconfigureReq - Request the implant to reconfigure itself
+message ReconfigureReq {
   int64 ReconnectInterval = 1;
+  int64 BeaconInterval = 2;
+  int64 BeaconJitter = 3;
 
   commonpb.Request Request = 9;
 }
 
-message ReconnectInterval {
+message Reconfigure {
+
   commonpb.Response Response = 9;
 }
 
@@ -901,6 +1054,9 @@ message SSHCommandReq {
   string Command = 4;
   string Password = 5;
   bytes PrivKey = 6;
+  string Krb5Conf = 7;
+  bytes Keytab = 8;
+  string Realm = 10;
   commonpb.Request Request = 9;
 }
 
@@ -931,7 +1087,7 @@ message GetPrivs {
   commonpb.Response Response = 9;
 }
 
-// Extensions
+// *** Extensions ***
 
 message RegisterExtensionReq {
   string Name = 1;
@@ -970,4 +1126,229 @@ message ListExtensions {
   repeated string Names = 1;
 
   commonpb.Response Response = 9;
+}
+
+
+// *** RportFwd ***
+
+message RportFwdStopListenerReq {
+  uint32 ID = 1;
+  
+  commonpb.Request Request = 9;
+}
+
+message RportFwdStartListenerReq {
+  string BindAddress = 1;
+  uint32 BindPort = 2;
+  uint32 ForwardPort = 3;
+  string ForwardAddress = 4;
+
+  commonpb.Request Request = 9;
+}
+
+message RportFwdListener {
+  uint32 ID = 1;
+  string BindAddress = 2;
+  uint32 BindPort = 3;
+  string ForwardAddress =4;
+  uint32 ForwardPort = 5;
+
+  commonpb.Response Response = 9;
+}
+
+
+message RportFwdListeners {
+  repeated RportFwdListener Listeners = 1;
+
+  commonpb.Response Response = 9;
+}
+
+message RportFwdListenersReq {
+
+  commonpb.Request Request = 9;
+}
+
+
+message RPortfwd {
+  uint32 Port = 1;
+  int32 Protocol = 2;
+  string Host = 3;
+
+  uint64 TunnelID = 8 [jstype = JS_STRING]; // Bind to this tunnel
+  commonpb.Response Response = 9;
+}
+
+message RPortfwdReq {
+  uint32 Port = 1;
+  int32 Protocol = 2;
+  string Host = 3;
+
+  uint64 TunnelID = 8 [jstype = JS_STRING]; // Bind to this tunnel
+  commonpb.Request Request = 9;
+}
+
+message ChmodReq {
+  string Path = 1;
+  string FileMode = 2;
+  bool Recursive = 3;
+
+  commonpb.Request Request = 9;
+}
+
+message Chmod {
+  string Path = 1;
+
+  commonpb.Response Response = 9;
+}
+
+message ChownReq {
+  string Path = 1;
+  string Uid = 2;
+  string Gid = 3;
+  bool Recursive = 4;
+
+  commonpb.Request Request = 9;
+}
+
+message Chown {
+  string Path = 1;
+
+  commonpb.Response Response = 9;
+}
+
+message ChtimesReq {
+  string Path = 1;
+  int64 ATime = 2;
+  int64 MTime = 3;
+
+  commonpb.Request Request = 9;
+}
+
+message Chtimes {
+  string Path = 1;
+
+  commonpb.Response Response = 9;
+}
+
+
+message MemfilesListReq {
+
+  commonpb.Request Request = 9;
+}
+
+message MemfilesAddReq {
+
+  commonpb.Request Request = 9;
+}
+
+message MemfilesAdd {
+  int64 Fd = 1;
+
+  commonpb.Response Response = 9;
+}
+
+message MemfilesRmReq {
+
+  int64 Fd = 1;
+
+  commonpb.Request Request = 9;
+}
+
+message MemfilesRm {
+  int64 Fd = 1;
+
+  commonpb.Response Response = 9;
+}
+
+
+
+// *** Wasm Extensions ***
+
+message RegisterWasmExtensionReq {
+  string Name = 1;
+  bytes WasmGz = 2;
+
+  commonpb.Request Request = 9;
+}
+
+message RegisterWasmExtension {
+
+  commonpb.Response Response = 9;
+}
+
+message DeregisterWasmExtensionReq {
+  string Name = 1;
+
+  commonpb.Request Request = 9;
+}
+
+message ListWasmExtensionsReq {
+
+  commonpb.Request Request = 9;
+}
+
+message ListWasmExtensions {
+  repeated string Names = 1;
+
+  commonpb.Response Response = 9;
+}
+
+message ExecWasmExtensionReq {
+  string Name = 1;
+  repeated string Args = 2;
+  bool Interactive = 3;
+  map<string, bytes> MemFS = 4;
+
+  uint64 TunnelID = 8 [jstype = JS_STRING]; // Bind to this tunnel
+  commonpb.Request Request = 9;
+}
+
+message ExecWasmExtension {
+  bytes Stdout = 1;
+  bytes Stderr = 2;
+  uint32 ExitCode = 3;
+
+  commonpb.Response Response = 9;
+}
+
+message ServicesReq {
+  string Hostname = 1;
+
+  commonpb.Request Request = 9;
+}
+
+message ServiceDetailReq {
+  ServiceInfoReq ServiceInfo = 1;
+
+  commonpb.Request Request = 9;
+}
+
+message ServiceDetails {
+  string Name = 1;
+  string DisplayName = 2;
+  string Description = 3;
+  uint32 Status = 4;
+  uint32 StartupType = 5;
+  string BinPath = 6;
+  string Account = 7;
+}
+
+message Services {
+  repeated ServiceDetails Details = 1;
+  string Error = 2;
+
+  commonpb.Response Response = 9;
+}
+
+message ServiceDetail {
+  ServiceDetails Detail = 1;
+  string Message = 2;
+
+  commonpb.Response Response = 9;
+}
+
+message StartServiceByNameReq {
+  ServiceInfoReq ServiceInfo = 1;
+
+  commonpb.Request Request = 9;
 }

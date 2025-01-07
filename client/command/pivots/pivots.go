@@ -25,18 +25,17 @@ import (
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"github.com/jedib0t/go-pretty/v6/table"
-
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// PivotsCmd - Display pivots for all sessions
-func PivotsCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// PivotsCmd - Display pivots for all sessions.
+func PivotsCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session := con.ActiveTarget.GetSessionInteractive()
 	if session == nil {
 		return
 	}
 	pivotListeners, err := con.Rpc.PivotSessionListeners(context.Background(), &sliverpb.PivotListenersReq{
-		Request: con.ActiveTarget.Request(ctx),
+		Request: con.ActiveTarget.Request(cmd),
 	})
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
@@ -54,8 +53,8 @@ func PivotsCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	}
 }
 
-// PrintPivotListeners - Print a table of pivot listeners
-func PrintPivotListeners(pivotListeners []*sliverpb.PivotListener, con *console.SliverConsoleClient) {
+// PrintPivotListeners - Print a table of pivot listeners.
+func PrintPivotListeners(pivotListeners []*sliverpb.PivotListener, con *console.SliverClient) {
 	tw := table.NewWriter()
 	tw.SetStyle(settings.GetTableStyle(con))
 	tw.AppendHeader(table.Row{
@@ -75,7 +74,7 @@ func PrintPivotListeners(pivotListeners []*sliverpb.PivotListener, con *console.
 	con.Printf("%s\n", tw.Render())
 }
 
-// PivotTypeToString - Convert a pivot type to a human string
+// PivotTypeToString - Convert a pivot type to a human string.
 func PivotTypeToString(pivotType sliverpb.PivotType) string {
 	switch pivotType {
 	case sliverpb.PivotType_TCP:

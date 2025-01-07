@@ -20,7 +20,7 @@ package transports
 	along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// {{if .Config.NamePipec2Enabled}}
+// {{if .Config.IncludeNamePipe}}
 
 import (
 	"io"
@@ -46,7 +46,7 @@ func namedPipeConnect(uri *url.URL) (*Connection, error) {
 		Send:    send,
 		Recv:    recv,
 		ctrl:    ctrl,
-		tunnels: &map[uint64]*Tunnel{},
+		tunnels: map[uint64]*Tunnel{},
 		mutex:   &sync.RWMutex{},
 		once:    &sync.Once{},
 		IsOpen:  true,
@@ -56,6 +56,7 @@ func namedPipeConnect(uri *url.URL) (*Connection, error) {
 			// {{end}}
 			close(send)
 			ctrl <- struct{}{}
+			pingCtrl <- struct{}{}
 			close(recv)
 		},
 	}
@@ -80,6 +81,9 @@ func namedPipeConnect(uri *url.URL) (*Connection, error) {
 				case <-pingCtrl:
 					return
 				case <-time.After(time.Minute):
+					// {{if .Config.Debug}}
+					log.Printf("[namedpipe] peer ping...")
+					// {{end}}
 					data, _ := proto.Marshal(&pb.PivotPing{
 						Nonce: uint32(time.Now().UnixNano()),
 					})
@@ -87,11 +91,10 @@ func namedPipeConnect(uri *url.URL) (*Connection, error) {
 						Type: pb.MsgPivotPeerPing,
 						Data: data,
 					}
-				case <-time.After(time.Minute):
 					// {{if .Config.Debug}}
 					log.Printf("[namedpipe] server ping...")
 					// {{end}}
-					data, _ := proto.Marshal(&pb.PivotPing{
+					data, _ = proto.Marshal(&pb.PivotPing{
 						Nonce: uint32(time.Now().UnixNano()),
 					})
 					connection.Send <- &pb.Envelope{
@@ -154,4 +157,4 @@ func namedPipeConnect(uri *url.URL) (*Connection, error) {
 	return connection, nil
 }
 
-// {{end}} -NamePipec2Enabled
+// {{end}} -IncludeNamePipe

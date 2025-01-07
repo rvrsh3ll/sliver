@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package priv
@@ -95,7 +96,23 @@ func SePrivEnable(s string) error {
 }
 
 func RevertToSelf() error {
+	err := windows.RevertToSelf()
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("RevertToSelf Error: %v\n", err)
+		// {{end}}
+	}
+	err = windows.CloseHandle(windows.Handle(CurrentToken))
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("CloseHandle Error: %v\n", err)
+		// {{end}}
+	}
 	CurrentToken = windows.Token(0)
+	return err
+}
+
+func TRevertToSelf() error {
 	return windows.RevertToSelf()
 }
 
@@ -223,8 +240,12 @@ func impersonateUser(username string) (token windows.Token, err error) {
 
 // MakeToken uses LogonUser to create a new logon session with the supplied username, domain and password.
 // It then impersonates the resulting token to allow access to remote network resources as the specified user.
-func MakeToken(domain string, username string, password string) error {
+func MakeToken(domain string, username string, password string, logonType uint32) error {
 	var token windows.Token
+	// Default to LOGON32_LOGON_NEW_CREDENTIALS
+	if logonType == 0 {
+		logonType = syscalls.LOGON32_LOGON_NEW_CREDENTIALS
+	}
 
 	pd, err := windows.UTF16PtrFromString(domain)
 	if err != nil {
@@ -238,7 +259,11 @@ func MakeToken(domain string, username string, password string) error {
 	if err != nil {
 		return err
 	}
-	err = syscalls.LogonUser(pu, pd, pp, syscalls.LOGON32_LOGON_NEW_CREDENTIALS, syscalls.LOGON32_PROVIDER_DEFAULT, &token)
+	if logonType == syscalls.LOGON32_LOGON_NEW_CREDENTIALS {
+		err = syscalls.LogonUser(pu, pd, pp, logonType, syscalls.LOGON32_PROVIDER_WINNT50, &token)
+	} else {
+		err = syscalls.LogonUser(pu, pd, pp, logonType, syscalls.LOGON32_PROVIDER_DEFAULT, &token)
+	}
 	if err != nil {
 		// {{if .Config.Debug}}
 		log.Printf("LogonUser failed: %v\n", err)
@@ -271,6 +296,82 @@ func deleteRegistryKey(keyPath, keyName string) (err error) {
 		return
 	}
 	err = registry.DeleteKey(key, keyName)
+	return
+}
+
+func RunAs(username string, domain string, password string, program string, args string, show int, netonly bool) (err error) {
+	// call CreateProcessWithLogonW to create a new process with the specified credentials
+	// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw
+	// convert username, domain, password, program, args, env, dir to *uint16
+	u, err := windows.UTF16PtrFromString(username)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("Invalid username\n")
+		// {{end}}
+		return
+	}
+	d, err := windows.UTF16PtrFromString(domain)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("Invalid domain\n")
+		// {{end}}
+		return
+	}
+	p, err := windows.UTF16PtrFromString(password)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("Invalid password\n")
+		// {{end}}
+		return
+	}
+	prog, err := windows.UTF16PtrFromString(program)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("Invalid program\n")
+		// {{end}}
+		return
+	}
+	var cmd *uint16
+	if len(args) > 0 {
+		cmd, err = windows.UTF16PtrFromString(fmt.Sprintf("%s %s", program, args))
+		if err != nil {
+			// {{if .Config.Debug}}
+			log.Printf("Invalid prog args\n")
+			// {{end}}
+			return
+		}
+	}
+	var e *uint16
+	// env := os.Environ()
+	// e, err = windows.UTF16PtrFromString(strings.Join(env, "\x00"))
+	// if err != nil {
+	// 	// {{if .Config.Debug}}
+	// 	log.Printf("Invalid env\n")
+	// 	// {{end}}
+	// 	return
+	// }
+	var di *uint16
+
+	// create a new startup info struct
+	si := &syscalls.StartupInfoEx{
+		StartupInfo: windows.StartupInfo{
+			Flags:      windows.STARTF_USESHOWWINDOW,
+			ShowWindow: uint16(show),
+		},
+	}
+	// create a new process info struct
+	pi := &windows.ProcessInformation{}
+	// call CreateProcessWithLogonW
+	var logonFlags uint32 = 0
+	if netonly {
+		logonFlags = 2 // LOGON_NETCREDENTIALS_ONLY
+	}
+	err = syscalls.CreateProcessWithLogonW(u, d, p, logonFlags, prog, cmd, 0, e, di, si, pi)
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("CreateProcessWithLogonW failed: %v\n", err)
+		// {{end}}
+	}
 	return
 }
 
@@ -594,4 +695,30 @@ func GetPrivs() ([]PrivilegeInfo, string, string, error) {
 	}
 
 	return privInfo, integrity, processName, nil
+}
+
+// CurrentTokenOwner returns the current thread's token owner
+func CurrentTokenOwner() (string, error) {
+	currToken := CurrentToken
+	// when the windows.Handle is zero (no impersonation), future method calls
+	// on it result in the windows error INVALID_TOKEN_HANDLE, so we get the
+	// actual handle
+	if currToken == 0 {
+		currToken = windows.GetCurrentProcessToken()
+	}
+	return TokenOwner(currToken)
+}
+
+// TokenOwner will resolve the primary token or thread owner of the given
+// handle
+func TokenOwner(hToken windows.Token) (string, error) {
+	tokenUser, err := hToken.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	user, domain, _, err := tokenUser.User.Sid.LookupAccount("")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`%s\%s`, domain, user), err
 }

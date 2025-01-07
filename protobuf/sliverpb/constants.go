@@ -205,8 +205,8 @@ const (
 	MsgSetEnvReq
 	// MsgSetEnv
 	MsgSetEnv
-	// MsgExecuteTokenReq - Execute request executed with the current (Windows) token
-	MsgExecuteTokenReq
+	// MsgExecuteWindowsReq - Execute request executed with the current (Windows) token
+	MsgExecuteWindowsReq
 	// MsgRegistryReadReq
 	MsgRegistryReadReq
 	// MsgRegistryWriteReq
@@ -235,14 +235,11 @@ const (
 	// MsgSocksData - Response of SocksData
 	MsgSocksData
 
-	// MsgReconnectIntervalReq
-	MsgReconnectIntervalReq
+	// MsgReconfigureReq
+	MsgReconfigureReq
 
-	// MsgReconnectInterval - Set reconnect interval
-	MsgReconnectInterval
-
-	// MsgPollInterval - Set poll interval
-	MsgPollInterval
+	// MsgReconfigure - Set Reconfigure
+	MsgReconfigure
 
 	// MsgUnsetEnvReq
 	MsgUnsetEnvReq
@@ -277,6 +274,84 @@ const (
 
 	// MsgRegistryDeleteKeyReq
 	MsgRegistryDeleteKeyReq
+
+	// MsgMvReq - Request to move or rename a file
+	MsgMvReq
+	// MsgMv - Confirms the success/failure of the mv request (resp to MsgMvReq)
+	MsgMv
+
+	// MsgCurrentTokenOwnerReq - Request to query the thread token owner
+	MsgCurrentTokenOwnerReq
+	// MsgCurrentTokenOwner - Replies with the current thread owner (resp to MsfCurrentToken)
+	MsgCurrentTokenOwner
+	// MsgInvokeInProcExecuteAssemblyReq - Request to load and execute a .NET assembly in-process
+	MsgInvokeInProcExecuteAssemblyReq
+
+	MsgRportFwdStopListenerReq
+
+	MsgRportFwdStartListenerReq
+
+	MsgRportFwdListener
+
+	MsgRportFwdListeners
+
+	MsgRportFwdListenersReq
+
+	MsgRPortfwdReq
+
+	// MsgChmodReq - Request to chmod a file
+	MsgChmodReq
+	// MsgChmod - Replies with file path
+	MsgChmod
+	// MsgChownReq - Request to chown a file
+	MsgChownReq
+	// MsgChown - Replies with file path
+	MsgChown
+	// MsgChtimesReq - Request to chtimes a file
+	MsgChtimesReq
+	// MsgChown - Replies with file path
+	MsgChtimes
+
+	// MsgChmodReq - Request to chmod a file
+	MsgMemfilesListReq
+
+	// MsgChownReq - Request to chown a file
+	MsgMemfilesAddReq
+	// MsgChown - Replies with file path
+	MsgMemfilesAdd
+
+	// MsgChtimesReq - Request to chtimes a file
+	MsgMemfilesRmReq
+	// MsgChown - Replies with file path
+	MsgMemfilesRm
+
+	// Wasm Extension messages
+	MsgRegisterWasmExtensionReq
+	MsgDeregisterWasmExtensionReq
+	MsgRegisterWasmExtension
+	MsgListWasmExtensionsReq
+	MsgListWasmExtensions
+	MsgExecWasmExtensionReq
+	MsgExecWasmExtension
+
+	// MsgCpReq - Request to copy a file from one place to another
+	MsgCpReq
+	// MsgCp - Confirms the success/failure, as well as the total number of bytes
+	// written of the cp request (resp to MsgCpReq)
+	MsgCp
+
+	// MsgGrepReq - Request to grep for data
+	MsgGrepReq
+
+	// Services messages
+	MsgServicesReq
+	MsgServiceDetailReq
+	MsgStartServiceByNameReq
+
+	MsgRegistryReadHiveReq
+
+	// MsgMountReq - Request filesystem mounts
+	MsgMountReq
 )
 
 // Constants to replace enums
@@ -362,8 +437,8 @@ func MsgNumber(request proto.Message) uint32 {
 		return MsgInvokeExecuteAssemblyReq
 	case *ExecuteAssembly:
 		return MsgExecuteAssembly
-	case *ExecuteTokenReq:
-		return MsgExecuteTokenReq
+	case *ExecuteWindowsReq:
+		return MsgExecuteWindowsReq
 	case *InvokeMigrateReq:
 		return MsgInvokeMigrateReq
 	case *SideloadReq:
@@ -449,14 +524,11 @@ func MsgNumber(request proto.Message) uint32 {
 	case *Portfwd:
 		return MsgPortfwd
 
-	case *ReconnectIntervalReq:
-		return MsgReconnectIntervalReq
+	case *ReconfigureReq:
+		return MsgReconfigureReq
+	case *Reconfigure:
+		return MsgReconfigure
 
-	case *ReconnectInterval:
-		return MsgReconnectInterval
-
-	case *PollInterval:
-		return MsgPollInterval
 	case *SSHCommandReq:
 		return MsgSSHCommandReq
 
@@ -469,10 +541,8 @@ func MsgNumber(request proto.Message) uint32 {
 
 	case *RegisterExtensionReq:
 		return MsgRegisterExtensionReq
-
 	case *CallExtensionReq:
 		return MsgCallExtensionReq
-
 	case *ListExtensionsReq:
 		return MsgListExtensionsReq
 
@@ -484,7 +554,85 @@ func MsgNumber(request proto.Message) uint32 {
 	case *CloseSession:
 		return MsgCloseSession
 
-	}
+	case *MvReq:
+		return MsgMvReq
+	case *Mv:
+		return MsgMv
 
+	case *CpReq:
+		return MsgCpReq
+	case *Cp:
+		return MsgCp
+
+	case *CurrentTokenOwnerReq:
+		return MsgCurrentTokenOwnerReq
+	case *CurrentTokenOwner:
+		return MsgCurrentTokenOwner
+	case *InvokeInProcExecuteAssemblyReq:
+		return MsgInvokeInProcExecuteAssemblyReq
+
+	case *RportFwdStartListenerReq:
+		return MsgRportFwdStartListenerReq
+	case *RportFwdStopListenerReq:
+		return MsgRportFwdStopListenerReq
+	case *RportFwdListenersReq:
+		return MsgRportFwdListenersReq
+	case *RportFwdListeners:
+		return MsgRportFwdListeners
+	case *RPortfwdReq:
+		return MsgRPortfwdReq
+
+	case *ChmodReq:
+		return MsgChmodReq
+	case *Chmod:
+		return MsgChmod
+	case *ChownReq:
+		return MsgChownReq
+	case *Chown:
+		return MsgChown
+	case *ChtimesReq:
+		return MsgChtimesReq
+	case *Chtimes:
+		return MsgChtimes
+
+	case *GrepReq:
+		return MsgGrepReq
+
+	case *MountReq:
+		return MsgMountReq
+
+	case *MemfilesListReq:
+		return MsgMemfilesListReq
+
+	case *MemfilesAddReq:
+		return MsgMemfilesAddReq
+	case *MemfilesAdd:
+		return MsgMemfilesAdd
+	case *MemfilesRmReq:
+		return MsgMemfilesRmReq
+	case *MemfilesRm:
+		return MsgMemfilesRm
+
+	case *RegisterWasmExtensionReq:
+		return MsgRegisterWasmExtensionReq
+	case *DeregisterWasmExtensionReq:
+		return MsgDeregisterWasmExtensionReq
+	case *ListWasmExtensionsReq:
+		return MsgListWasmExtensionsReq
+	case *ExecWasmExtensionReq:
+		return MsgExecWasmExtensionReq
+
+	case *ServicesReq:
+		return MsgServicesReq
+
+	case *ServiceDetailReq:
+		return MsgServiceDetailReq
+
+	case *StartServiceByNameReq:
+		return MsgStartServiceByNameReq
+
+	case *RegistryReadHiveReq:
+		return MsgRegistryReadHiveReq
+	}
 	return uint32(0)
 }

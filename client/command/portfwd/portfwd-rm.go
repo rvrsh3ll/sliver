@@ -21,12 +21,12 @@ package portfwd
 import (
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/client/core"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// PortfwdRmCmd - Remove an existing tunneled port forward
-func PortfwdRmCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	portfwdID := ctx.Flags.Int("id")
+// PortfwdRmCmd - Remove an existing tunneled port forward.
+func PortfwdRmCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	portfwdID, _ := cmd.Flags().GetInt("id")
 	if portfwdID < 1 {
 		con.PrintErrorf("Must specify a valid portfwd id\n")
 		return

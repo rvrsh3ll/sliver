@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bishopfox/sliver/implant/sliver/encoders"
 	"github.com/bishopfox/sliver/protobuf/dnspb"
+	"github.com/bishopfox/sliver/util/encoders"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -46,10 +46,10 @@ var (
 	parentMax = fmt.Sprintf(".%s.%s.%s.", strings.Repeat("a", 63), strings.Repeat("b", 63), strings.Repeat("c", 24))
 
 	opts = &DNSOptions{
-		QueryTimeout:      time.Duration(time.Second * 3),
-		RetryWait:         time.Duration(time.Second * 3),
-		RetryCount:        1,
-		WokersPerResolver: 1,
+		QueryTimeout:       time.Duration(time.Second * 3),
+		RetryWait:          time.Duration(time.Second * 3),
+		RetryCount:         1,
+		WorkersPerResolver: 1,
 	}
 )
 

@@ -23,33 +23,35 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/bishopfox/sliver/client/command/settings"
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"github.com/desertbit/grumble"
-	"github.com/jedib0t/go-pretty/v6/table"
-	"google.golang.org/protobuf/proto"
 )
 
 // NetstatCmd - Display active network connections on the remote system
-func NetstatCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+func NetstatCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	listening := ctx.Flags.Bool("listen")
-	ip4 := ctx.Flags.Bool("ip4")
-	ip6 := ctx.Flags.Bool("ip6")
-	tcp := ctx.Flags.Bool("tcp")
-	udp := ctx.Flags.Bool("udp")
+	listening, _ := cmd.Flags().GetBool("listen")
+	ip4, _ := cmd.Flags().GetBool("ip4")
+	ip6, _ := cmd.Flags().GetBool("ip6")
+	tcp, _ := cmd.Flags().GetBool("tcp")
+	udp, _ := cmd.Flags().GetBool("udp")
+	numeric, _ := cmd.Flags().GetBool("numeric")
 
 	implantPID := getPID(session, beacon)
 	activeC2 := getActiveC2(session, beacon)
 
 	netstat, err := con.Rpc.Netstat(context.Background(), &sliverpb.NetstatReq{
-		Request:   con.ActiveTarget.Request(ctx),
+		Request:   con.ActiveTarget.Request(cmd),
 		TCP:       tcp,
 		UDP:       udp,
 		Listening: listening,
@@ -67,24 +69,20 @@ func NetstatCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 				con.PrintErrorf("Failed to decode response %s\n", err)
 				return
 			}
-			PrintNetstat(netstat, implantPID, activeC2, con)
+			PrintNetstat(netstat, implantPID, activeC2, numeric, con)
 		})
 		con.PrintAsyncResponse(netstat.Response)
 	} else {
-		PrintNetstat(netstat, implantPID, activeC2, con)
+		PrintNetstat(netstat, implantPID, activeC2, numeric, con)
 	}
 }
 
-func PrintNetstat(netstat *sliverpb.Netstat, implantPID int32, activeC2 string, con *console.SliverConsoleClient) {
+func PrintNetstat(netstat *sliverpb.Netstat, implantPID int32, activeC2 string, numeric bool, con *console.SliverClient) {
 	lookup := func(skaddr *sliverpb.SockTabEntry_SockAddr) string {
-		const IPv4Strlen = 17
 		addr := skaddr.Ip
 		names, err := net.LookupAddr(addr)
 		if err == nil && len(names) > 0 {
 			addr = names[0]
-		}
-		if len(addr) > IPv4Strlen {
-			addr = addr[:IPv4Strlen]
 		}
 		return fmt.Sprintf("%s:%d", addr, skaddr.Port)
 	}
@@ -98,8 +96,12 @@ func PrintNetstat(netstat *sliverpb.Netstat, implantPID int32, activeC2 string, 
 		if entry.Process != nil {
 			pid = fmt.Sprintf("%d/%s", entry.Process.Pid, entry.Process.Executable)
 		}
-		srcAddr := lookup(entry.LocalAddr)
-		dstAddr := lookup(entry.RemoteAddr)
+		srcAddr := fmt.Sprintf("%s:%d", entry.LocalAddr.Ip, entry.LocalAddr.Port)
+		dstAddr := fmt.Sprintf("%s:%d", entry.RemoteAddr.Ip, entry.RemoteAddr.Port)
+		if !numeric {
+			srcAddr = lookup(entry.LocalAddr)
+			dstAddr = lookup(entry.RemoteAddr)
+		}
 		if entry.Process != nil && entry.Process.Pid == implantPID {
 			tw.AppendRow(table.Row{
 				fmt.Sprintf(console.Green+"%s"+console.Normal, entry.Protocol),

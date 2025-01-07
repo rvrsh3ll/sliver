@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Kill - Kill the implant process
 func (rpc *Server) Kill(ctx context.Context, kill *sliverpb.KillReq) (*commonpb.Empty, error) {
 	var (
 		beacon *models.Beacon
@@ -49,13 +50,14 @@ func (rpc *Server) Kill(ctx context.Context, kill *sliverpb.KillReq) (*commonpb.
 }
 
 func (rpc *Server) killSession(kill *sliverpb.KillReq, session *core.Session) (*commonpb.Empty, error) {
-	core.Sessions.Remove(session.ID)
 	data, err := proto.Marshal(kill)
 	if err != nil {
 		return nil, err
 	}
 	timeout := time.Duration(kill.Request.GetTimeout())
-	session.Request(sliverpb.MsgNumber(kill), timeout, data)
+	// Do not block waiting for the msg send, the implant connection may already be dead
+	go session.Request(sliverpb.MsgNumber(kill), timeout, data)
+	core.Sessions.Remove(session.ID)
 	return &commonpb.Empty{}, nil
 }
 

@@ -21,7 +21,6 @@ package exec
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,39 +28,55 @@ import (
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 )
 
-// SideloadCmd - Sideload a shared library on the remote system
-func SideloadCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// SideloadCmd - Sideload a shared library on the remote system.
+func SideloadCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	binPath := ctx.Args.String("filepath")
+	if len(args) < 1 {
+		cmd.Usage()
+		return
+	}
 
-	entryPoint := ctx.Flags.String("entry-point")
-	processName := ctx.Flags.String("process")
-	args := strings.Join(ctx.Args.StringList("args"), " ")
+	binPath := args[0]
+	var binArgs []string
+	if len(args) > 1 {
+		binArgs = args[1:]
+	}
 
-	binData, err := ioutil.ReadFile(binPath)
+	entryPoint, _ := cmd.Flags().GetString("entry-point")
+	processName, _ := cmd.Flags().GetString("process")
+	keepAlive, _ := cmd.Flags().GetBool("keep-alive")
+	isUnicode, _ := cmd.Flags().GetBool("unicode")
+	pPid, _ := cmd.Flags().GetUint32("ppid")
+
+	binData, err := os.ReadFile(binPath)
 	if err != nil {
 		con.PrintErrorf("%s", err.Error())
 		return
 	}
+	processArgsStr, _ := cmd.Flags().GetString("process-arguments")
+	processArgs := strings.Split(processArgsStr, " ")
 	isDLL := (filepath.Ext(binPath) == ".dll")
 	ctrl := make(chan bool)
-	con.SpinUntil(fmt.Sprintf("Sideloading %s ...", binPath), ctrl)
+	con.SpinUntil(fmt.Sprintf("Sideloading %s %v...", binPath, binArgs), ctrl)
 	sideload, err := con.Rpc.Sideload(context.Background(), &sliverpb.SideloadReq{
-		Request:     con.ActiveTarget.Request(ctx),
-		Args:        args,
+		Request:     con.ActiveTarget.Request(cmd),
+		Args:        binArgs,
 		Data:        binData,
 		EntryPoint:  entryPoint,
 		ProcessName: processName,
-		Kill:        !ctx.Flags.Bool("keep-alive"),
+		Kill:        !keepAlive,
 		IsDLL:       isDLL,
+		IsUnicode:   isUnicode,
+		PPid:        pPid,
+		ProcessArgs: processArgs,
 	})
 	ctrl <- true
 	<-ctrl
@@ -70,7 +85,7 @@ func SideloadCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 		return
 	}
 
-	hostname := getHostname(session, beacon)
+	hostName := getHostname(session, beacon)
 	if sideload.Response != nil && sideload.Response.Async {
 		con.AddBeaconCallback(sideload.Response.TaskID, func(task *clientpb.BeaconTask) {
 			err = proto.Unmarshal(task.Response, sideload)
@@ -78,34 +93,29 @@ func SideloadCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 				con.PrintErrorf("Failed to decode response %s\n", err)
 				return
 			}
-			PrintSideload(sideload, hostname, ctx, con)
+
+			HandleSideloadResponse(sideload, binPath, hostName, cmd, con)
 		})
 		con.PrintAsyncResponse(sideload.Response)
 	} else {
-		PrintSideload(sideload, hostname, ctx, con)
+		HandleSideloadResponse(sideload, binPath, hostName, cmd, con)
 	}
 }
 
-// PrintSideload - Print the sideload command output
-func PrintSideload(sideload *sliverpb.Sideload, hostname string, ctx *grumble.Context, con *console.SliverConsoleClient) {
+func HandleSideloadResponse(sideload *sliverpb.Sideload, binPath string, hostName string, cmd *cobra.Command, con *console.SliverClient) {
+	saveLoot, _ := cmd.Flags().GetBool("loot")
+	lootName, _ := cmd.Flags().GetString("name")
+
 	if sideload.GetResponse().GetErr() != "" {
 		con.PrintErrorf("%s\n", sideload.GetResponse().GetErr())
 		return
 	}
 
-	var outFilePath *os.File
-	var err error
-	if ctx.Flags.Bool("save") {
-		outFile := filepath.Base(fmt.Sprintf("%s_%s*.log", ctx.Command.Name, hostname))
-		outFilePath, err = ioutil.TempFile("", outFile)
-		if err != nil {
-			con.PrintErrorf("%s\n", err)
-			return
-		}
-	}
-	con.PrintInfof("Output:\n%s", sideload.GetResult())
-	if outFilePath != nil {
-		outFilePath.Write([]byte(sideload.GetResult()))
-		con.PrintInfof("Output saved to %s\n", outFilePath.Name())
+	save, _ := cmd.Flags().GetBool("save")
+
+	PrintExecutionOutput(sideload.GetResult(), save, cmd.Name(), hostName, con)
+
+	if saveLoot {
+		LootExecute([]byte(sideload.Result), lootName, cmd.Name(), binPath, hostName, con)
 	}
 }

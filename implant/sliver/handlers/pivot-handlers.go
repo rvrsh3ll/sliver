@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	genericPivotHandlers = map[uint32]PivotHandler{
+	genericPivotHandlers = map[uint32]TunnelHandler{
 		pb.MsgPivotListenersReq:     pivotListenersHandler,
 		pb.MsgPivotStartListenerReq: pivotStartListenerHandler,
 		pb.MsgPivotStopListenerReq:  pivotStopListenerHandler,
@@ -40,7 +40,7 @@ var (
 )
 
 // GetPivotHandlers - Returns a map of pivot handlers
-func GetPivotHandlers() map[uint32]PivotHandler {
+func GetPivotHandlers() map[uint32]TunnelHandler {
 	return genericPivotHandlers
 }
 
@@ -70,7 +70,7 @@ func pivotStartListenerHandler(envelope *pb.Envelope, connection *transports.Con
 	}
 
 	if createListener, ok := pivots.SupportedPivotListeners[req.Type]; ok {
-		listener, err := createListener(req.BindAddress, connection.Send)
+		listener, err := createListener(req.BindAddress, connection.Send, req.Options...)
 		if err != nil {
 			resp.Response.Err = err.Error()
 			data, _ := proto.Marshal(resp)
@@ -111,6 +111,7 @@ func pivotStopListenerHandler(envelope *pb.Envelope, connection *transports.Conn
 		return
 	}
 	pivots.StopListener(req.ID)
+	pivots.RemoveListener(req.ID)
 	connection.Send <- &pb.Envelope{
 		ID:   envelope.ID,
 		Data: []byte{},

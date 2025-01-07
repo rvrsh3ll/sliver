@@ -73,17 +73,27 @@ func WithBindIP(ip net.IP) Option {
 }
 
 // WithLogger can be used to provide a custom log target.
-// Defaults to ioutil.Discard.
+// Defaults to io.Discard.
 func WithLogger(l Logger) Option {
 	return func(s *Server) {
 		s.logger = l
 	}
 }
 
-// WithDial Optional function for dialing out
+// WithDial Optional function for dialing out.
+// The callback set by WithDialAndRequest will be called first.
 func WithDial(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
 	return func(s *Server) {
 		s.dial = dial
+	}
+}
+
+// WithDialAndRequest Optional function for dialing out with the access of request detail.
+func WithDialAndRequest(
+	dial func(ctx context.Context, network, addr string, request *Request) (net.Conn, error),
+) Option {
+	return func(s *Server) {
+		s.dialWithRequest = dial
 	}
 }
 

@@ -22,13 +22,17 @@ import (
 
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 )
 
-// ProfilesNewCmd - Create a new implant profile
-func ProfilesNewCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	name := ctx.Args.String("name")
-	config := parseCompileFlags(ctx, con)
+// ProfilesNewCmd - Create a new implant profile.
+func ProfilesNewCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	}
+	// name := ctx.Args.String("name")
+	_, config := parseCompileFlags(cmd, con)
 	if config == nil {
 		return
 	}
@@ -44,19 +48,23 @@ func ProfilesNewCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	}
 }
 
-// ProfilesNewBeaconCmd - Create a new beacon profile
-func ProfilesNewBeaconCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
-	name := ctx.Args.String("name")
+// ProfilesNewBeaconCmd - Create a new beacon profile.
+func ProfilesNewBeaconCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	}
+	// name := ctx.Args.String("name")
 	if name == "" {
 		con.PrintErrorf("No profile name specified\n")
 		return
 	}
-	config := parseCompileFlags(ctx, con)
+	_, config := parseCompileFlags(cmd, con)
 	if config == nil {
 		return
 	}
 	config.IsBeacon = true
-	err := parseBeaconFlags(ctx, con, config)
+	err := parseBeaconFlags(cmd, config)
 	if err != nil {
 		con.PrintErrorf("%s\n", err)
 		return

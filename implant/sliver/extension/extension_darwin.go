@@ -21,11 +21,13 @@ package extension
 import (
 	"bytes"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	// {{if .Config.Debug}}
 	"log"
 	// {{end}}
+
 	"github.com/Binject/universal"
 )
 
@@ -36,6 +38,7 @@ type DarwinExtension struct {
 	arch        string
 	serverStore bool
 	init        string
+	sync.Mutex
 }
 
 type extensionArguments struct {
@@ -64,6 +67,8 @@ func (d *DarwinExtension) GetArch() string {
 
 func (d *DarwinExtension) Load() error {
 	var err error
+	d.Lock()
+	defer d.Unlock()
 	loader, err := universal.NewLoader()
 	if err != nil {
 		return err
@@ -98,6 +103,8 @@ func (d *DarwinExtension) Call(export string, arguments []byte, onFinish func([]
 	// {{if .Config.Debug}}
 	log.Printf("Calling %s, arg size: %d\n", export, extArgs.inDataSize)
 	// {{end}}
+	d.Lock()
+	defer d.Unlock()
 	_, err := d.module.Call(export, uintptr(unsafe.Pointer(&extArgs)))
 	if err != nil {
 		return err

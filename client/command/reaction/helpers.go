@@ -20,36 +20,41 @@ package reaction
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"fmt"
+	"os"
 	"path"
+	"strconv"
+	"strings"
 
 	"github.com/bishopfox/sliver/client/assets"
+	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/client/core"
+	"github.com/rsteube/carapace"
 )
 
 const (
 	ReactionFileName = "reactions.json"
 )
 
-// GetReactionFilePath - Get the
+// GetReactionFilePath - Get the.
 func GetReactionFilePath() string {
 	return path.Join(assets.GetRootAppDir(), ReactionFileName)
 }
 
-// SaveReactions - Save the reactions to the reaction file
+// SaveReactions - Save the reactions to the reaction file.
 func SaveReactions(reactions []core.Reaction) error {
 	reactionFilePath := GetReactionFilePath()
 	data, err := json.MarshalIndent(reactions, "", "  ")
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(reactionFilePath, data, 0600)
+	return os.WriteFile(reactionFilePath, data, 0o600)
 }
 
-// LoadReactions - Save the reactions to the reaction file
+// LoadReactions - Save the reactions to the reaction file.
 func LoadReactions() (int, error) {
 	reactionFilePath := GetReactionFilePath()
-	data, err := ioutil.ReadFile(reactionFilePath)
+	data, err := os.ReadFile(reactionFilePath)
 	if err != nil {
 		return 0, err
 	}
@@ -77,4 +82,20 @@ func isReactable(reaction core.Reaction) bool {
 		}
 	}
 	return false
+}
+
+// ReactionIDCompleter completes saved/available reaction IDs.
+func ReactionIDCompleter(_ *console.SliverClient) carapace.Action {
+	results := make([]string, 0)
+
+	for _, reaction := range core.Reactions.All() {
+		results = append(results, strconv.Itoa(reaction.ID))
+		results = append(results, fmt.Sprintf("[%s] %s", reaction.EventType, strings.Join(reaction.Commands, ",")))
+	}
+
+	if len(results) == 0 {
+		return carapace.ActionMessage("no reactions available")
+	}
+
+	return carapace.ActionValuesDescribed(results...).Tag("reactions")
 }

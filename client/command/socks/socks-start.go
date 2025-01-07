@@ -27,27 +27,27 @@ import (
 
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/client/core"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 	"gopkg.in/AlecAivazis/survey.v1"
 )
 
-// SocksStartCmd - Add a new tunneled port forward
-func SocksStartCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// SocksStartCmd - Add a new tunneled port forward.
+func SocksStartCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session := con.ActiveTarget.GetSessionInteractive()
 	if session == nil {
 		return
 	}
 
 	// listener
-	host := ctx.Flags.String("host")
-	port := ctx.Flags.String("port")
+	host, _ := cmd.Flags().GetString("host")
+	port, _ := cmd.Flags().GetString("port")
 	bindAddr := fmt.Sprintf("%s:%s", host, port)
 	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		con.PrintErrorf("Socks5 Listen %s \n", err.Error())
 		return
 	}
-	username := ctx.Flags.String("user")
+	username, _ := cmd.Flags().GetString("user")
 	if err != nil {
 		return
 	}

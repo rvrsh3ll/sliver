@@ -19,6 +19,7 @@ package db
 */
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/bishopfox/sliver/server/configs"
@@ -45,31 +46,65 @@ func newDBClient() *gorm.DB {
 		dbClient = postgresClient(dbConfig)
 	case configs.MySQL:
 		dbClient = mySQLClient(dbConfig)
+	default:
+		panic(fmt.Sprintf("Unknown DB Dialect: '%s'", dbConfig.Dialect))
 	}
 
-	err := dbClient.AutoMigrate(
+	// We cannot pass all of these into AutoMigrate at once because if one fails, subsequent models will not be created
+	var allDBModels []interface{} = append(make([]interface{}, 0),
+		&models.HttpC2Header{},
+		&models.HttpC2ServerConfig{},
+		&models.HttpC2ImplantConfig{},
+		&models.HttpC2Config{},
+		&models.HttpC2URLParameter{},
+		&models.HttpC2PathSegment{},
 		&models.Beacon{},
 		&models.BeaconTask{},
 		&models.DNSCanary{},
+		&models.Crackstation{},
+		&models.Benchmark{},
+		&models.CrackTask{},
+		&models.CrackCommand{},
+		&models.CrackFile{},
+		&models.CrackFileChunk{},
 		&models.Certificate{},
 		&models.Host{},
-		&models.IOC{},
-		&models.ExtensionData{},
-		&models.ImplantC2{},
-		&models.ImplantConfig{},
-		&models.ImplantBuild{},
 		&models.KeyValue{},
-		&models.CanaryDomain{},
-		&models.ImplantProfile{},
-		&models.Loot{},
-		&models.Operator{},
-		&models.WebContent{},
-		&models.Website{},
 		&models.WGKeys{},
 		&models.WGPeer{},
+		&models.ResourceID{},
+		&models.HttpC2Cookie{},
+		&models.IOC{},
+		&models.ExtensionData{},
+		&models.ImplantProfile{},
+		&models.ImplantConfig{},
+		&models.ImplantBuild{},
+		&models.ImplantC2{},
+		&models.EncoderAsset{},
+		&models.KeyExHistory{},
+		&models.CanaryDomain{},
+		&models.Loot{},
+		&models.Credential{},
+		&models.Operator{},
+		&models.Website{},
+		&models.WebContent{},
+		&models.ListenerJob{},
+		&models.HTTPListener{},
+		&models.DNSListener{},
+		&models.WGListener{},
+		&models.MultiplayerListener{},
+		&models.MtlsListener{},
+		&models.DnsDomain{},
+		&models.MonitoringProvider{},
 	)
-	if err != nil {
-		clientLog.Error(err)
+
+	var err error
+
+	for _, model := range allDBModels {
+		err = dbClient.AutoMigrate(model)
+		if err != nil {
+			clientLog.Error(err)
+		}
 	}
 
 	// Get generic database object sql.DB to use its functions
@@ -95,7 +130,6 @@ func postgresClient(dbConfig *configs.DatabaseConfig) *gorm.DB {
 	if err != nil {
 		panic(err)
 	}
-	clientLog.Infof("postgres -> %s", dsn)
 	dbClient, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		PrepareStmt: true,
 		Logger:      getGormLogger(dbConfig),
@@ -111,7 +145,6 @@ func mySQLClient(dbConfig *configs.DatabaseConfig) *gorm.DB {
 	if err != nil {
 		panic(err)
 	}
-	clientLog.Infof("mysql -> %s", dsn)
 	dbClient, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		PrepareStmt: true,
 		Logger:      getGormLogger(dbConfig),

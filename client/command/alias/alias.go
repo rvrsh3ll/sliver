@@ -21,28 +21,31 @@ package alias
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/bishopfox/sliver/client/assets"
 	"github.com/bishopfox/sliver/client/command/settings"
 	"github.com/bishopfox/sliver/client/console"
-	"github.com/desertbit/grumble"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
+	"github.com/rsteube/carapace"
+	"github.com/spf13/cobra"
 )
 
-// AliasesCmd - The alias command
-func AliasesCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// AliasesCmd - The alias command.
+func AliasesCmd(cmd *cobra.Command, con *console.SliverClient, args []string) error {
 	if 0 < len(loadedAliases) {
 		PrintAliases(con)
 	} else {
 		con.PrintInfof("No aliases installed, use the 'armory' command to automatically install some\n")
 	}
+
+	return nil
 }
 
-// PrintAliases - Print a list of loaded aliases
-func PrintAliases(con *console.SliverConsoleClient) {
+// PrintAliases - Print a list of loaded aliases.
+func PrintAliases(con *console.SliverClient) {
 	tw := table.NewWriter()
 	tw.SetStyle(settings.GetTableStyle(con))
 	tw.AppendHeader(table.Row{
@@ -84,8 +87,8 @@ func PrintAliases(con *console.SliverConsoleClient) {
 	con.Println(tw.Render())
 }
 
-// AliasCommandNameCompleter - Completer for installed extensions command names
-func AliasCommandNameCompleter(prefix string, args []string, con *console.SliverConsoleClient) []string {
+// AliasCommandNameCompleter - Completer for installed extensions command names.
+func AliasCommandNameCompleter(prefix string, args []string, con *console.SliverClient) []string {
 	results := []string{}
 	for name := range loadedAliases {
 		if strings.HasPrefix(name, prefix) {
@@ -111,7 +114,7 @@ func getInstalledManifests() map[string]*AliasManifest {
 	manifestPaths := assets.GetInstalledAliasManifests()
 	installedManifests := map[string]*AliasManifest{}
 	for _, manifestPath := range manifestPaths {
-		data, err := ioutil.ReadFile(manifestPath)
+		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			continue
 		}
@@ -123,4 +126,15 @@ func getInstalledManifests() map[string]*AliasManifest {
 		installedManifests[manifest.CommandName] = manifest
 	}
 	return installedManifests
+}
+
+// AliasCommandNameCompleter - Completer for installed extensions command names.
+func AliasCompleter() carapace.Action {
+	return carapace.ActionCallback(func(c carapace.Context) carapace.Action {
+		results := []string{}
+		for name := range loadedAliases {
+			results = append(results, name)
+		}
+		return carapace.ActionValues(results...).Tag("aliases")
+	})
 }

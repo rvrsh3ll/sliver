@@ -21,26 +21,44 @@ package privilege
 import (
 	"context"
 
+	"google.golang.org/protobuf/proto"
+
+	"github.com/spf13/cobra"
+
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"github.com/desertbit/grumble"
-	"google.golang.org/protobuf/proto"
 )
 
+var logonTypes = map[string]uint32{
+	"LOGON_INTERACTIVE":       2,
+	"LOGON_NETWORK":           3,
+	"LOGON_BATCH":             4,
+	"LOGON_SERVICE":           5,
+	"LOGON_UNLOCK":            7,
+	"LOGON_NETWORK_CLEARTEXT": 8,
+	"LOGON_NEW_CREDENTIALS":   9,
+}
+
 // MakeTokenCmd - Windows only, create a token using "valid" credentails
-func MakeTokenCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+func MakeTokenCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	username := ctx.Flags.String("username")
-	password := ctx.Flags.String("password")
-	domain := ctx.Flags.String("domain")
+	username, _ := cmd.Flags().GetString("username")
+	password, _ := cmd.Flags().GetString("password")
+	domain, _ := cmd.Flags().GetString("domain")
+	logonType, _ := cmd.Flags().GetString("logon-type")
+
+	if _, ok := logonTypes[logonType]; !ok {
+		con.PrintErrorf("Invalid logon type: %s\n", logonType)
+		return
+	}
 
 	if username == "" || password == "" {
-		con.PrintErrorf("Pou must provide a username and password\n")
+		con.PrintErrorf("You must provide a username and password\n")
 		return
 	}
 
@@ -48,10 +66,11 @@ func MakeTokenCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	con.SpinUntil("Creating new logon session ...", ctrl)
 
 	makeToken, err := con.Rpc.MakeToken(context.Background(), &sliverpb.MakeTokenReq{
-		Request:  con.ActiveTarget.Request(ctx),
-		Username: username,
-		Domain:   domain,
-		Password: password,
+		Request:   con.ActiveTarget.Request(cmd),
+		Username:  username,
+		Domain:    domain,
+		Password:  password,
+		LogonType: logonTypes[logonType],
 	})
 	ctrl <- true
 	<-ctrl
@@ -76,7 +95,7 @@ func MakeTokenCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 }
 
 // PrintMakeToken - Print the results of attempting to make a token
-func PrintMakeToken(makeToken *sliverpb.MakeToken, domain string, username string, con *console.SliverConsoleClient) {
+func PrintMakeToken(makeToken *sliverpb.MakeToken, domain string, username string, con *console.SliverClient) {
 	if makeToken.Response != nil && makeToken.Response.GetErr() != "" {
 		con.PrintErrorf("%s\n", makeToken.Response.GetErr())
 		return

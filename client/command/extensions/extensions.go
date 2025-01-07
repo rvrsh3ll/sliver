@@ -21,19 +21,20 @@ package extensions
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/bishopfox/sliver/client/assets"
 	"github.com/bishopfox/sliver/client/command/settings"
 	"github.com/bishopfox/sliver/client/console"
-	"github.com/desertbit/grumble"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
+	"github.com/rsteube/carapace"
+	"github.com/spf13/cobra"
 )
 
-// ExtensionsCmd - List information about installed extensions
-func ExtensionsCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// ExtensionsCmd - List information about installed extensions.
+func ExtensionsCmd(cmd *cobra.Command, con *console.SliverClient) {
 	if 0 < len(getInstalledManifests()) {
 		PrintExtensions(con)
 	} else {
@@ -41,8 +42,8 @@ func ExtensionsCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 	}
 }
 
-// PrintExtensions - Print a list of loaded extensions
-func PrintExtensions(con *console.SliverConsoleClient) {
+// PrintExtensions - Print a list of loaded extensions.
+func PrintExtensions(con *console.SliverClient) {
 	tw := table.NewWriter()
 	tw.SetStyle(settings.GetTableStyle(con))
 	tw.AppendHeader(table.Row{
@@ -64,25 +65,27 @@ func PrintExtensions(con *console.SliverConsoleClient) {
 
 	installedManifests := getInstalledManifests()
 	for _, extension := range loadedExtensions {
+		//for _, extension := range extensionm.ExtCommand {
 		installed := ""
-		if _, ok := installedManifests[extension.CommandName]; ok {
+		if _, ok := installedManifests[extension.Manifest.Name]; ok {
 			installed = "✅"
 		}
 		tw.AppendRow(table.Row{
-			extension.Name,
+			extension.Manifest.Name,
 			extension.CommandName,
 			strings.Join(extensionPlatforms(extension), ",\n"),
-			extension.Version,
+			extension.Manifest.Version,
 			installed,
-			extension.ExtensionAuthor,
-			extension.OriginalAuthor,
-			extension.RepoURL,
+			extension.Manifest.ExtensionAuthor,
+			extension.Manifest.OriginalAuthor,
+			extension.Manifest.RepoURL,
 		})
+		//}
 	}
 	con.Println(tw.Render())
 }
 
-func extensionPlatforms(extension *ExtensionManifest) []string {
+func extensionPlatforms(extension *ExtCommand) []string {
 	platforms := map[string]string{}
 	for _, entry := range extension.Files {
 		platforms[fmt.Sprintf("%s/%s", entry.OS, entry.Arch)] = ""
@@ -98,7 +101,7 @@ func getInstalledManifests() map[string]*ExtensionManifest {
 	manifestPaths := assets.GetInstalledExtensionManifests()
 	installedManifests := map[string]*ExtensionManifest{}
 	for _, manifestPath := range manifestPaths {
-		data, err := ioutil.ReadFile(manifestPath)
+		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			continue
 		}
@@ -107,19 +110,31 @@ func getInstalledManifests() map[string]*ExtensionManifest {
 		if err != nil {
 			continue
 		}
-		installedManifests[manifest.CommandName] = manifest
+		installedManifests[manifest.Name] = manifest
 	}
 	return installedManifests
 }
 
-// ExtensionsCommandNameCompleter - Completer for installed extensions command names
-func ExtensionsCommandNameCompleter(prefix string, args []string, con *console.SliverConsoleClient) []string {
-	installedManifests := getInstalledManifests()
-	results := []string{}
-	for _, manifest := range installedManifests {
-		if strings.HasPrefix(manifest.CommandName, prefix) {
+// ExtensionsCommandNameCompleter - Completer for installed extensions command names.
+func ExtensionsCommandNameCompleter(con *console.SliverClient) carapace.Action {
+	return carapace.ActionCallback(func(c carapace.Context) carapace.Action {
+		//installedManifests := getInstalledManifests()
+		results := []string{}
+		for _, manifest := range loadedExtensions {
 			results = append(results, manifest.CommandName)
+			results = append(results, manifest.Help)
 		}
-	}
-	return results
+
+		return carapace.ActionValuesDescribed(results...).Tag("extension commands")
+	})
+}
+
+func ManifestCompleter() carapace.Action {
+	return carapace.ActionCallback(func(c carapace.Context) carapace.Action {
+		results := []string{}
+		for k := range loadedManifests {
+			results = append(results, k)
+		}
+		return carapace.ActionValues(results...).Tag("extensions")
+	})
 }

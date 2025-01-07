@@ -29,9 +29,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bishopfox/sliver/client/constants"
 	consts "github.com/bishopfox/sliver/client/constants"
+	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/server/certs"
-	"github.com/bishopfox/sliver/server/configs"
 	"github.com/bishopfox/sliver/server/core"
 	"github.com/bishopfox/sliver/server/log"
 	"golang.zx2c4.com/wireguard/device"
@@ -42,19 +43,19 @@ var (
 )
 
 // StartMTLSListenerJob - Start an mTLS listener as a job
-func StartMTLSListenerJob(host string, listenPort uint16) (*core.Job, error) {
-	bind := fmt.Sprintf("%s:%d", host, listenPort)
-	ln, err := StartMutualTLSListener(host, listenPort)
+func StartMTLSListenerJob(mtlsListener *clientpb.MTLSListenerReq) (*core.Job, error) {
+	bind := fmt.Sprintf("%s:%d", mtlsListener.Host, mtlsListener.Port)
+	ln, err := StartMutualTLSListener(mtlsListener.Host, uint16(mtlsListener.Port))
 	if err != nil {
 		return nil, err // If we fail to bind don't setup the Job
 	}
 
 	job := &core.Job{
 		ID:          core.NextJobID(),
-		Name:        "mtls",
+		Name:        constants.MtlsStr,
 		Description: fmt.Sprintf("mutual tls listener %s", bind),
-		Protocol:    "tcp",
-		Port:        listenPort,
+		Protocol:    constants.TCPListenerStr,
+		Port:        uint16(mtlsListener.Port),
 		JobCtrl:     make(chan bool),
 	}
 
@@ -70,66 +71,45 @@ func StartMTLSListenerJob(host string, listenPort uint16) (*core.Job, error) {
 }
 
 // StartWGListenerJob - Start a WireGuard listener as a job
-func StartWGListenerJob(listenPort uint16, nListenPort uint16, keyExchangeListenPort uint16) (*core.Job, error) {
-	ln, dev, currentWGConf, err := StartWGListener(listenPort, nListenPort, keyExchangeListenPort)
+func StartWGListenerJob(wgListener *clientpb.WGListenerReq) (*core.Job, error) {
+	ln, dev, _, err := StartWGListener(uint16(wgListener.Port), uint16(wgListener.NPort), uint16(wgListener.KeyPort))
 	if err != nil {
 		return nil, err // If we fail to bind don't setup the Job
 	}
 
 	job := &core.Job{
 		ID:          core.NextJobID(),
-		Name:        "wg",
-		Description: fmt.Sprintf("wg listener port: %d", listenPort),
-		Protocol:    "udp",
-		Port:        listenPort,
+		Name:        constants.WGStr,
+		Description: fmt.Sprintf("wg listener port: %d", wgListener.Port),
+		Protocol:    constants.UDPListenerStr,
+		Port:        uint16(wgListener.Port),
 		JobCtrl:     make(chan bool),
 	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	done := make(chan bool)
 
-	// Every 5 seconds update the wireguard config to include new peers
-	go func(dev *device.Device, currentWGConf *bytes.Buffer) {
-		oldNumPeers := 0
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				currentPeers, err := certs.GetWGPeers()
-				if err != nil {
-					jobLog.Errorf("Failed to get current Wireguard Peers %s", err)
+	// Listener for new keys
+	go func(dev *device.Device) {
+		for event := range core.EventBroker.Subscribe() {
+			switch event.EventType {
+
+			case consts.WireGuardNewPeer:
+				buf := bytes.NewBuffer(nil)
+				fmt.Fprintf(buf, "%s", event.Data)
+				if err := dev.IpcSetOperation(bufio.NewReader(buf)); err != nil {
+					jobLog.Errorf("Failed to update Wireguard Config %s", err)
 					continue
-				}
-
-				if len(currentPeers) > oldNumPeers {
-					jobLog.Infof("New WG peers. Updating Wireguard config")
-
-					oldNumPeers = len(currentPeers)
-
-					jobLog.Infof("Old WG config for peers: %s", currentWGConf.String())
-					for k, v := range currentPeers {
-						fmt.Fprintf(currentWGConf, "public_key=%s\n", k)
-						fmt.Fprintf(currentWGConf, "allowed_ip=%s/32\n", v)
-					}
-
-					jobLog.Infof("New WG config for peers: %s", currentWGConf.String())
-
-					if err := dev.IpcSetOperation(bufio.NewReader(currentWGConf)); err != nil {
-						jobLog.Errorf("Failed to update Wireguard Config %s", err)
-						continue
-					}
-					jobLog.Infof("Successfully updated Wireguard config")
 				}
 			}
 		}
-	}(dev, currentWGConf)
+	}(dev)
 
 	go func() {
 		<-job.JobCtrl
 		jobLog.Infof("Stopping wg listener (%d) ...", job.ID)
 		ticker.Stop()
-		done <- true
+
 		err = ln.Close() // Kills listener GoRoutines in StartWGListener()
 		if err != nil {
 			jobLog.Fatal("Error closing listener", err)
@@ -139,6 +119,7 @@ func StartWGListenerJob(listenPort uint16, nListenPort uint16, keyExchangeListen
 			jobLog.Fatal("Error closing wg tunnel", err)
 		}
 		core.Jobs.Remove(job)
+		done <- true
 	}()
 	core.Jobs.Add(job)
 
@@ -146,17 +127,17 @@ func StartWGListenerJob(listenPort uint16, nListenPort uint16, keyExchangeListen
 }
 
 // StartDNSListenerJob - Start a DNS listener as a job
-func StartDNSListenerJob(bindIface string, lport uint16, domains []string, canaries bool) (*core.Job, error) {
-	server := StartDNSListener(bindIface, lport, domains, canaries)
-	description := fmt.Sprintf("%s (canaries %v)", strings.Join(domains, " "), canaries)
+func StartDNSListenerJob(dnsListener *clientpb.DNSListenerReq) (*core.Job, error) {
+	server := StartDNSListener(dnsListener.Host, uint16(dnsListener.Port), dnsListener.Domains, dnsListener.Canaries, dnsListener.EnforceOTP)
+	description := fmt.Sprintf("%s (canaries %v)", strings.Join(dnsListener.Domains, " "), dnsListener.Canaries)
 	job := &core.Job{
 		ID:          core.NextJobID(),
-		Name:        "dns",
+		Name:        constants.DnsStr,
 		Description: description,
-		Protocol:    "udp",
-		Port:        lport,
+		Protocol:    constants.UDPListenerStr,
+		Port:        uint16(dnsListener.Port),
 		JobCtrl:     make(chan bool),
-		Domains:     domains,
+		Domains:     dnsListener.Domains,
 	}
 
 	go func() {
@@ -189,24 +170,24 @@ func StartDNSListenerJob(bindIface string, lport uint16, domains []string, canar
 }
 
 // StartHTTPListenerJob - Start a HTTP listener as a job
-func StartHTTPListenerJob(conf *HTTPServerConfig) (*core.Job, error) {
-	server, err := StartHTTPListener(conf)
+func StartHTTPListenerJob(req *clientpb.HTTPListenerReq) (*core.Job, error) {
+	server, err := StartHTTPListener(req)
 	if err != nil {
 		return nil, err
 	}
-	name := "http"
-	if conf.Secure {
-		name = "https"
+	name := constants.HttpStr
+	if req.Secure {
+		name = constants.HttpsStr
 	}
 
 	job := &core.Job{
 		ID:          core.NextJobID(),
 		Name:        name,
-		Description: fmt.Sprintf("%s for domain %s", name, conf.Domain),
-		Protocol:    "tcp",
-		Port:        uint16(conf.LPort),
+		Description: fmt.Sprintf("%s for domain %s", name, req.Domain),
+		Protocol:    constants.TCPListenerStr,
+		Port:        uint16(req.Port),
 		JobCtrl:     make(chan bool),
-		Domains:     []string{conf.Domain},
+		Domains:     []string{req.Domain},
 	}
 	core.Jobs.Add(job)
 
@@ -227,7 +208,7 @@ func StartHTTPListenerJob(conf *HTTPServerConfig) (*core.Job, error) {
 			if server.ServerConf.ACME {
 				err = server.HTTPServer.ListenAndServeTLS("", "") // ACME manager pulls the certs under the hood
 			} else {
-				err = listenAndServeTLS(server.HTTPServer, conf.Cert, conf.Key)
+				err = listenAndServeTLS(server.HTTPServer, req.Cert, req.Key)
 			}
 		} else {
 			err = server.HTTPServer.ListenAndServe()
@@ -248,7 +229,7 @@ func StartHTTPListenerJob(conf *HTTPServerConfig) (*core.Job, error) {
 }
 
 // StartTCPStagerListenerJob - Start a TCP staging payload listener
-func StartTCPStagerListenerJob(host string, port uint16, shellcode []byte) (*core.Job, error) {
+func StartTCPStagerListenerJob(host string, port uint16, profileName string, shellcode []byte) (*core.Job, error) {
 	ln, err := StartTCPListener(host, port, shellcode)
 	if err != nil {
 		return nil, err // If we fail to bind don't setup the Job
@@ -260,6 +241,7 @@ func StartTCPStagerListenerJob(host string, port uint16, shellcode []byte) (*cor
 		Description: "Raw TCP listener (stager only)",
 		Protocol:    "tcp",
 		Port:        port,
+		ProfileName: profileName,
 		JobCtrl:     make(chan bool),
 	}
 
@@ -281,143 +263,6 @@ func StartTCPStagerListenerJob(host string, port uint16, shellcode []byte) (*cor
 	return job, nil
 }
 
-// StartHTTPStagerListenerJob - Start an HTTP(S) stager payload listener
-func StartHTTPStagerListenerJob(conf *HTTPServerConfig, data []byte) (*core.Job, error) {
-	server, err := StartHTTPListener(conf)
-	if err != nil {
-		return nil, err
-	}
-	name := "http"
-	if conf.Secure {
-		name = "https"
-	}
-	server.SliverStage = data
-	job := &core.Job{
-		ID:          core.NextJobID(),
-		Name:        name,
-		Description: fmt.Sprintf("Stager handler %s for domain %s", name, conf.Domain),
-		Protocol:    "tcp",
-		Port:        uint16(conf.LPort),
-		JobCtrl:     make(chan bool),
-	}
-	core.Jobs.Add(job)
-
-	cleanup := func(err error) {
-		server.Cleanup()
-		core.Jobs.Remove(job)
-		core.EventBroker.Publish(core.Event{
-			Job:       job,
-			EventType: consts.JobStoppedEvent,
-			Err:       err,
-		})
-	}
-	once := &sync.Once{}
-
-	go func() {
-		var err error
-		if server.ServerConf.Secure {
-			if server.ServerConf.ACME {
-				err = server.HTTPServer.ListenAndServeTLS("", "") // ACME manager pulls the certs under the hood
-			} else {
-				err = listenAndServeTLS(server.HTTPServer, conf.Cert, conf.Key)
-			}
-		} else {
-			err = server.HTTPServer.ListenAndServe()
-		}
-		if err != nil {
-			jobLog.Errorf("%s listener error %v", name, err)
-			once.Do(func() { cleanup(err) })
-			job.JobCtrl <- true // Cleanup other goroutine
-		}
-	}()
-
-	go func() {
-		<-job.JobCtrl
-		once.Do(func() { cleanup(nil) })
-	}()
-
-	return job, nil
-}
-
-// StartPersistentJobs - Start persistent jobs
-func StartPersistentJobs(cfg *configs.ServerConfig) error {
-	if cfg.Jobs == nil {
-		return nil
-	}
-
-	for _, j := range cfg.Jobs.MTLS {
-		job, err := StartMTLSListenerJob(j.Host, j.Port)
-		if err != nil {
-			return err
-		}
-		job.PersistentID = j.JobID
-	}
-
-	for _, j := range cfg.Jobs.WG {
-		job, err := StartWGListenerJob(j.Port, j.NPort, j.KeyPort)
-		if err != nil {
-			return err
-		}
-		job.PersistentID = j.JobID
-	}
-
-	for _, j := range cfg.Jobs.DNS {
-		job, err := StartDNSListenerJob(j.Host, j.Port, j.Domains, j.Canaries)
-		if err != nil {
-			return err
-		}
-		job.PersistentID = j.JobID
-	}
-
-	for _, j := range cfg.Jobs.HTTP {
-		cfg := &HTTPServerConfig{
-			Addr:            fmt.Sprintf("%s:%d", j.Host, j.Port),
-			LPort:           j.Port,
-			Secure:          j.Secure,
-			Domain:          j.Domain,
-			Website:         j.Website,
-			Cert:            j.Cert,
-			Key:             j.Key,
-			ACME:            j.ACME,
-			EnforceOTP:      j.EnforceOTP,
-			LongPollTimeout: time.Duration(j.LongPollTimeout),
-			LongPollJitter:  time.Duration(j.LongPollJitter),
-		}
-		job, err := StartHTTPListenerJob(cfg)
-		if err != nil {
-			return err
-		}
-		job.PersistentID = j.JobID
-	}
-
-	return nil
-}
-
-// checkInterface verifies if an IP address
-// is attached to an existing network interface
-func checkInterface(a string) bool {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return false
-	}
-	for _, i := range interfaces {
-		addresses, err := i.Addrs()
-		if err != nil {
-			return false
-		}
-		for _, netAddr := range addresses {
-			addr, err := net.ResolveTCPAddr("tcp", netAddr.String())
-			if err != nil {
-				return false
-			}
-			if addr.IP.String() == a {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // Fuck'in Go - https://stackoverflow.com/questions/30815244/golang-https-server-passing-certfile-and-kyefile-in-terms-of-byte-array
 // basically the same as server.ListenAndServerTLS() but we can pass in byte slices instead of file paths
 func listenAndServeTLS(srv *http.Server, certPEMBlock, keyPEMBlock []byte) error {
@@ -427,7 +272,10 @@ func listenAndServeTLS(srv *http.Server, certPEMBlock, keyPEMBlock []byte) error
 	}
 	config := &tls.Config{}
 	if srv.TLSConfig != nil {
-		*config = *srv.TLSConfig
+		config = srv.TLSConfig
+	}
+	if certs.TLSKeyLogger != nil {
+		config.KeyLogWriter = certs.TLSKeyLogger
 	}
 	if config.NextProtos == nil {
 		config.NextProtos = []string{"http/1.1"}

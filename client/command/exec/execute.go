@@ -18,29 +18,41 @@ package exec
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bishopfox/sliver/client/command/loot"
 	"github.com/bishopfox/sliver/client/console"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
-	"github.com/desertbit/grumble"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 )
 
-// ExecuteCmd - Run a command on the remote system
-func ExecuteCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
+// ExecuteCmd - Run a command on the remote system.
+func ExecuteCmd(cmd *cobra.Command, con *console.SliverClient, args []string) {
 	session, beacon := con.ActiveTarget.GetInteractive()
 	if session == nil && beacon == nil {
 		return
 	}
 
-	cmdPath := ctx.Args.String("command")
-	args := ctx.Args.StringList("arguments")
-	token := ctx.Flags.Bool("token")
-	output := ctx.Flags.Bool("output")
-	stdout := ctx.Flags.String("stdout")
-	stderr := ctx.Flags.String("stderr")
+	cmdPath := args[0]
+	args = args[1:]
+
+	token, _ := cmd.Flags().GetBool("token")
+	hidden, _ := cmd.Flags().GetBool("hidden")
+	output, _ := cmd.Flags().GetBool("output")
+	stdout, _ := cmd.Flags().GetString("stdout")
+	stderr, _ := cmd.Flags().GetString("stderr")
+	saveLoot, _ := cmd.Flags().GetBool("loot")
+	saveOutput, _ := cmd.Flags().GetBool("save")
+	ppid, _ := cmd.Flags().GetUint32("ppid")
+	hostName := getHostname(session, beacon)
+
+	// If the user wants to loot or save the output, we have to capture it regardless of if they specified -o
+	captureOutput := output || saveLoot || saveOutput
 
 	if output && beacon != nil {
 		con.PrintWarnf("Using --output in beacon mode, if the command blocks the task will never complete\n\n")
@@ -51,21 +63,28 @@ func ExecuteCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 
 	ctrl := make(chan bool)
 	con.SpinUntil(fmt.Sprintf("Executing %s %s ...", cmdPath, strings.Join(args, " ")), ctrl)
-	if token {
-		exec, err = con.Rpc.ExecuteToken(context.Background(), &sliverpb.ExecuteTokenReq{
-			Request: con.ActiveTarget.Request(ctx),
-			Path:    cmdPath,
-			Args:    args,
-			Output:  output,
-			Stderr:  stderr,
-			Stdout:  stdout,
+	if token || hidden || ppid != 0 {
+		if (session != nil && session.OS != "windows") || (beacon != nil && beacon.OS != "windows") {
+			con.PrintErrorf("The token, hide window, and ppid options are not valid on %s\n", session.OS)
+			return
+		}
+		exec, err = con.Rpc.ExecuteWindows(context.Background(), &sliverpb.ExecuteWindowsReq{
+			Request:    con.ActiveTarget.Request(cmd),
+			Path:       cmdPath,
+			Args:       args,
+			Output:     captureOutput,
+			Stderr:     stderr,
+			Stdout:     stdout,
+			UseToken:   token,
+			HideWindow: hidden,
+			PPid:       ppid,
 		})
 	} else {
 		exec, err = con.Rpc.Execute(context.Background(), &sliverpb.ExecuteReq{
-			Request: con.ActiveTarget.Request(ctx),
+			Request: con.ActiveTarget.Request(cmd),
 			Path:    cmdPath,
 			Args:    args,
-			Output:  output,
+			Output:  captureOutput,
 			Stderr:  stderr,
 			Stdout:  stdout,
 		})
@@ -84,24 +103,44 @@ func ExecuteCmd(ctx *grumble.Context, con *console.SliverConsoleClient) {
 				con.PrintErrorf("Failed to decode response %s\n", err)
 				return
 			}
-			PrintExecute(exec, ctx, con)
+			HandleExecuteResponse(exec, cmdPath, hostName, cmd, con)
 		})
 		con.PrintAsyncResponse(exec.Response)
 	} else {
-		PrintExecute(exec, ctx, con)
+		HandleExecuteResponse(exec, cmdPath, hostName, cmd, con)
 	}
 }
 
-// PrintExecute - Print the output of an executed command
-func PrintExecute(exec *sliverpb.Execute, ctx *grumble.Context, con *console.SliverConsoleClient) {
-	ignoreStderr := ctx.Flags.Bool("ignore-stderr")
-	saveLoot := ctx.Flags.Bool("loot")
-	stdout := ctx.Flags.String("stdout")
-	stderr := ctx.Flags.String("stderr")
-	cmdPath := ctx.Args.String("command")
-	args := ctx.Args.StringList("arguments")
+func HandleExecuteResponse(exec *sliverpb.Execute, cmdPath string, hostName string, cmd *cobra.Command, con *console.SliverClient) {
+	var lootedOutput []byte
+	stdout, _ := cmd.Flags().GetString("stdout")
+	saveLoot, _ := cmd.Flags().GetBool("loot")
+	saveOutput, _ := cmd.Flags().GetBool("save")
+	lootName, _ := cmd.Flags().GetString("name")
+	ignoreStderr, _ := cmd.Flags().GetBool("ignore-stderr")
 
-	output := ctx.Flags.Bool("output")
+	if saveLoot || saveOutput {
+		lootedOutput = combineCommandOutput(exec, stdout == "", !ignoreStderr && 0 < len(exec.Stderr))
+	}
+
+	if saveLoot {
+		LootExecute(lootedOutput, lootName, cmd.Name(), cmdPath, hostName, con)
+	}
+
+	if saveOutput {
+		SaveExecutionOutput(string(lootedOutput), cmd.Name(), hostName, con)
+	}
+
+	PrintExecute(exec, cmd, con)
+}
+
+// PrintExecute - Print the output of an executed command.
+func PrintExecute(exec *sliverpb.Execute, cmd *cobra.Command, con *console.SliverClient) {
+	ignoreStderr, _ := cmd.Flags().GetBool("ignore-stderr")
+	stdout, _ := cmd.Flags().GetString("stdout")
+	stderr, _ := cmd.Flags().GetString("stderr")
+
+	output, _ := cmd.Flags().GetBool("output")
 	if !output {
 		if exec.Status == 0 {
 			con.PrintInfof("Command executed successfully\n")
@@ -111,17 +150,14 @@ func PrintExecute(exec *sliverpb.Execute, ctx *grumble.Context, con *console.Sli
 		return
 	}
 
-	combined := ""
 	if stdout == "" {
-		combined = string(exec.Stdout)
-		con.PrintInfof("Output:\n%s", combined)
+		con.PrintInfof("Output:\n%s", string(exec.Stdout))
 	} else {
 		con.PrintInfof("Stdout saved at %s\n", stdout)
 	}
 
 	if stderr == "" {
 		if !ignoreStderr && 0 < len(exec.Stderr) {
-			combined = fmt.Sprintf("%s\nStderr:\n%s", combined, string(exec.Stderr))
 			con.PrintInfof("Stderr:\n%s", string(exec.Stderr))
 		}
 	} else {
@@ -131,13 +167,96 @@ func PrintExecute(exec *sliverpb.Execute, ctx *grumble.Context, con *console.Sli
 	if exec.Status != 0 {
 		con.PrintErrorf("Exited with status %d!\n", exec.Status)
 	}
-	if saveLoot && 0 < len(combined) {
-		name := fmt.Sprintf("[exec] %s %s", cmdPath, strings.Join(args, " "))
-		err := loot.AddLootFile(con.Rpc, name, "console.txt", []byte(combined), false)
-		if err != nil {
-			con.PrintErrorf("Failed to save output as loot: %s\n", err)
-		} else {
-			con.PrintInfof("Output saved as loot\n")
+}
+
+func getHostname(session *clientpb.Session, beacon *clientpb.Beacon) string {
+	if session != nil {
+		return session.Hostname
+	}
+	if beacon != nil {
+		return beacon.Hostname
+	}
+	return ""
+}
+
+func determineCommandName(command string) string {
+	commandName := strings.ReplaceAll(command, "\\", "/")
+
+	commandName = commandName[strings.LastIndex(commandName, "/")+1:]
+
+	if strings.Contains(commandName, ".") {
+		commandName = commandName[:strings.LastIndex(commandName, ".")]
+	}
+
+	return commandName
+}
+
+func combineCommandOutput(exec *sliverpb.Execute, combineStdOut bool, combineStdErr bool) []byte {
+	var outputString string = ""
+
+	if combineStdOut {
+		outputString += "Output (stdout):\n" + string(exec.Stdout)
+	}
+
+	if combineStdErr {
+		if combineStdOut {
+			outputString += "\n"
 		}
+		outputString += "Stderr:\n" + string(exec.Stderr)
+	}
+
+	return []byte(outputString)
+}
+
+func LootExecute(commandOutput []byte, lootName string, sliverCmdName string, cmdName string, hostName string, con *console.SliverClient) {
+	if len(commandOutput) == 0 {
+		con.PrintInfof("There was no output from execution, so there is nothing to loot.\n")
+		return
+	}
+
+	timeNow := time.Now().UTC().Format("20060102150405")
+
+	shortCommandName := determineCommandName(cmdName)
+
+	fileName := fmt.Sprintf("%s_%s_%s_%s.log", sliverCmdName, hostName, shortCommandName, timeNow)
+	if lootName == "" {
+		lootName = fmt.Sprintf("[%s] %s on %s (%s)", sliverCmdName, shortCommandName, hostName, timeNow)
+	}
+
+	lootMessage := loot.CreateLootMessage(con.ActiveTarget.GetHostUUID(), fileName, lootName, clientpb.FileType_TEXT, commandOutput)
+	loot.SendLootMessage(lootMessage, con)
+}
+
+func PrintExecutionOutput(executionOutput string, saveOutput bool, commandName string, hostName string, con *console.SliverClient) {
+	con.PrintInfof("Output:\n%s", executionOutput)
+
+	if saveOutput {
+		SaveExecutionOutput(executionOutput, commandName, hostName, con)
+	}
+}
+
+func SaveExecutionOutput(executionOutput string, commandName string, hostName string, con *console.SliverClient) {
+	var outFilePath *os.File
+	var err error
+
+	if len(executionOutput) == 0 {
+		con.PrintInfof("There was no output from execution, so there is nothing to save.")
+		return
+	}
+
+	timeNow := time.Now().UTC().Format("20060102150405")
+
+	outFileName := filepath.Base(fmt.Sprintf("%s_%s_%s*.log", commandName, hostName, timeNow))
+
+	outFilePath, err = os.CreateTemp("", outFileName)
+
+	if err != nil {
+		con.PrintErrorf("%s\n", err)
+		return
+	}
+
+	if outFilePath != nil {
+		outFilePath.WriteString(executionOutput)
+		con.PrintInfof("Output saved to %s\n", outFilePath.Name())
 	}
 }

